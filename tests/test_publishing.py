@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from pipeline_doctor.incidents.models import Incident, IncidentStatus
 from pipeline_doctor.incidents.repository import IncidentRepository
+from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
 from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher
@@ -25,6 +26,24 @@ def project(tmp_path: Path) -> Path:
 @pytest.fixture
 def repository(tmp_path: Path) -> IncidentRepository:
     return IncidentRepository(tmp_path / "incidents")
+
+
+def test_approval_refuses_a_code_change_jev_did_not_clear(
+    project: Path,
+    repository: IncidentRepository,
+    pending_incident: Incident,
+    tmp_path: Path,
+    recording_publisher: RecordingPublisher,
+) -> None:
+    # Setup
+    verdict = JevVerdict(decision=JevDecision.REVISE_FIX, score=0.5)
+    repository.save(pending_incident.model_copy(update={"verdict": verdict}))
+    service = ApprovalService(repository, recording_publisher, IncidentMemory(tmp_path / "memory.jsonl"), project)
+
+    # Act / Assert
+    with pytest.raises(IncidentApprovalError, match="JEV decision is revise_fix"):
+        service.approve(pending_incident.id, "nader")
+    assert recording_publisher.opened == []
 
 
 def test_approval_opens_draft_pr_and_records_memory(

@@ -52,6 +52,8 @@ class LLMReasoner:
             hypotheses=investigation.render_hypotheses(),
             evidence=investigation.render_evidence(),
         )
+        if investigation.critique:
+            prompt += f"\n\n## Reviewer rejected the previous diagnosis\n{investigation.critique}"
         return self._client.generate(SYSTEM_PROMPT, prompt, HypothesisList).hypotheses
 
     def assess(self, investigation: Investigation) -> Assessment:

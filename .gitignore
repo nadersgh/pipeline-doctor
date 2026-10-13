@@ -19,3 +19,6 @@ demo_project/target/
 demo_project/logs/
 *.duckdb
 *.duckdb.wal
+
+# Eval runs are generated; publish numbers in the README instead
+evals/results/

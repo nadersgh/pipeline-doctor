@@ -40,6 +40,8 @@ def build_incident_message(incident: Incident, public_base_url: str) -> dict[str
     )
     plain = diagnosis.plain_summary if diagnosis else (incident.error or "No diagnosis.")
     fix = f"*Proposed fix:* {incident.fix.title} (`{incident.fix.kind}`)" if incident.fix else "*Proposed fix:* none"
+    if incident.verdict:
+        fix += f"\n*JEV:* `{incident.verdict.decision}` (score {incident.verdict.score:.0%})"
     text = f":stethoscope: {incident.event.describe()} failed: {headline}"
     return {
         "text": text,

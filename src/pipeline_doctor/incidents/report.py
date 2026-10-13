@@ -1,4 +1,5 @@
 from pipeline_doctor.incidents.models import FixKind, Incident
+from pipeline_doctor.jev.models import JEV_DECISION_DESCRIPTIONS
 
 
 def render_incident_report(incident: Incident) -> str:
@@ -30,6 +31,15 @@ def render_incident_report(incident: Incident) -> str:
             lines += [f"{index}. {step}" for index, step in enumerate(fix.operational_steps, start=1)]
         if fix.diff:
             lines += ["", "```diff", fix.diff.rstrip(), "```"]
+    verdict = incident.verdict
+    if verdict is not None:
+        lines += [
+            "",
+            f"## JEV decision: `{verdict.decision}` (score {verdict.score:.0%}, reviewer `{verdict.reviewer}`)",
+            JEV_DECISION_DESCRIPTIONS[verdict.decision],
+            "",
+            *[f"- {check.describe()}" for check in verdict.checks],
+        ]
     metrics = incident.metrics
     lines += [
         "",

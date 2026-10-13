@@ -12,6 +12,8 @@ from pipeline_doctor.demo.workspace import DemoWorkspace, run_pipeline
 from pipeline_doctor.evals.cases import list_eval_cases
 from pipeline_doctor.evals.injection import inject_fault
 from pipeline_doctor.incidents.models import FixKind, IncidentStatus, RootCauseCategory
+from pipeline_doctor.jev.models import JevDecision
+from pipeline_doctor.jev.reviewer import RuleBasedJev
 from pipeline_doctor.mcp_server import create_mcp_server
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.observability.usage import UsageMeter
@@ -48,6 +50,8 @@ def test_agent_diagnoses_and_fixes_injected_fault(
     assert incident.status is IncidentStatus.AWAITING_APPROVAL
     assert incident.diagnosis is not None
     assert incident.diagnosis.category is case.category
+    assert incident.verdict is not None
+    assert incident.verdict.decision is JevDecision.PROCEED, incident.verdict.feedback()
     assert incident.fix is not None
     if incident.fix.kind is not FixKind.OPERATIONAL:
         write_project_files(demo_workspace.project_dir, apply_edits(demo_workspace.project_dir, incident.fix.edits))
@@ -85,6 +89,7 @@ class ScriptedLLMClient:
                     "culprit": {"relation": "raw.orders", "column": "customer_id"},
                     "technical_summary": "Recent loads have null customer_id.",
                     "plain_summary": "New orders arrived without a customer, so revenue by customer is incomplete.",
+                    "evidence": ["null share of raw.orders.customer_id jumped in the last two loads"],
                 },
             },
             FixDraft.__name__: {
@@ -105,7 +110,8 @@ def test_llm_reasoner_runs_through_the_graph_and_unsafe_sql_is_blocked(
     # Setup
     _, failure = _break(demo_workspace, "nulls_orders_customer_id")
     toolkit = build_toolkit(demo_settings, IncidentMemory(demo_workspace.root / "memory.jsonl"))
-    agent = PipelineDoctor(toolkit, LLMReasoner(ScriptedLLMClient(), "scripted", "duckdb"), UsageMeter(3.0, 15.0))
+    reasoner = LLMReasoner(ScriptedLLMClient(), "scripted", "duckdb")
+    agent = PipelineDoctor(toolkit, reasoner, UsageMeter(3.0, 15.0), RuleBasedJev(toolkit.project_dir))
 
     # Act
     incident = agent.diagnose(failure)
@@ -115,6 +121,8 @@ def test_llm_reasoner_runs_through_the_graph_and_unsafe_sql_is_blocked(
     assert incident.diagnosis.category is RootCauseCategory.SOURCE_NULL_SPIKE
     assert incident.metrics.queries_blocked == 1
     assert incident.metrics.queries_run == 1
+    assert incident.verdict is not None
+    assert incident.verdict.decision is JevDecision.PROCEED
 
 
 def test_mcp_server_exposes_read_only_lineage_tool(demo_settings: Settings) -> None:
@@ -137,7 +145,7 @@ def test_unconfident_diagnosis_never_yields_a_code_change(
     _, failure = _break(demo_workspace, "nulls_orders_customer_id")
     toolkit = build_toolkit(demo_settings, IncidentMemory(demo_workspace.root / "memory.jsonl"))
     reasoner = LLMReasoner(ScriptedLLMClient(confident=False), "scripted", "duckdb")
-    agent = PipelineDoctor(toolkit, reasoner, UsageMeter(3.0, 15.0), max_rounds=2)
+    agent = PipelineDoctor(toolkit, reasoner, UsageMeter(3.0, 15.0), RuleBasedJev(toolkit.project_dir), max_rounds=2)
 
     # Act
     incident = agent.diagnose(failure)
@@ -147,3 +155,25 @@ def test_unconfident_diagnosis_never_yields_a_code_change(
     assert incident.fix is not None
     assert incident.fix.kind is FixKind.OPERATIONAL
     assert incident.fix.title.startswith("Low-confidence")
+    assert incident.verdict is not None
+    assert incident.verdict.decision is JevDecision.ESCALATE
+
+
+def test_disabled_jev_skips_review_and_still_proposes_a_fix(
+    demo_workspace: DemoWorkspace, demo_settings: Settings
+) -> None:
+    # Setup
+    case, failure = _break(demo_workspace, "renamed_orders_status")
+    settings = demo_settings.model_copy(update={"jev_enabled": False})
+    agent = build_agent(settings, IncidentMemory(demo_workspace.root / "memory.jsonl"))
+
+    # Act
+    incident = agent.diagnose(failure)
+
+    # Assert
+    assert incident.status is IncidentStatus.AWAITING_APPROVAL
+    assert incident.diagnosis is not None
+    assert incident.diagnosis.category is case.category
+    assert incident.verdict is None
+    assert incident.fix is not None
+    assert incident.fix.kind is not FixKind.OPERATIONAL

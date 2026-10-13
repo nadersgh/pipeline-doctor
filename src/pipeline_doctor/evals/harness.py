@@ -34,13 +34,14 @@ class EvalHarness:
 
     def run(self, cases: list[EvalCase], output_dir: Path, workers: int = 4) -> EvalRun:
         started_at = datetime.now(UTC)
-        run_dir = output_dir / f"{started_at:%Y%m%dT%H%M%S}_{self._settings.reasoner}"
+        suffix = "" if self._settings.jev_enabled else "_nojev"
+        run_dir = output_dir / f"{started_at:%Y%m%dT%H%M%S}_{self._settings.reasoner}{suffix}"
         run_dir.mkdir(parents=True, exist_ok=True)
         configure_tracing(run_dir / "spans.jsonl")
         template = create_workspace(self._work_dir / "_template")
         with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(lambda case: self._run_case(template, case), cases))
-        summary = summarize(self._settings.reasoner, started_at, results)
+        summary = summarize(self._settings.reasoner, started_at, results, jev_enabled=self._settings.jev_enabled)
         logger.info(f"write eval results {run_dir}")
         (run_dir / "results.jsonl").write_text("".join(result.model_dump_json() + "\n" for result in results))
         (run_dir / "summary.json").write_text(summary.model_dump_json(indent=2))
@@ -104,6 +105,8 @@ def _score(base: CaseResult, case: EvalCase, incident: Incident) -> CaseResult:
             "category_correct": diagnosis.category == case.category,
             "culprit_correct": _same_relation(predicted_relation, case.culprit_relation) and column_matches,
             "fix_kind": incident.fix.kind if incident.fix else None,
+            "jev_decision": incident.verdict.decision if incident.verdict else None,
+            "jev_score": incident.verdict.score if incident.verdict else None,
             "error": incident.error,
             **_metrics(incident),
         }
