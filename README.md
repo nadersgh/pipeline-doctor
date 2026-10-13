@@ -97,7 +97,7 @@ uv run pipeline-doctor demo faults                        # list the injectable 
 uv run pipeline-doctor demo break renamed_orders_status   # inject a fault and run the DAG's tasks
 uv run pipeline-doctor diagnose                           # diagnose the failure, print the report
 uv run pipeline-doctor approve <incident-id> --approver you
-uv run pipeline-doctor eval --workers 6                   # 36-case eval, writes evals/results/<run>/
+uv run pipeline-doctor eval --workers 6                   # 36-case dev eval, writes evals/results/<run>/
 ```
 
 Use an LLM reasoner with `PIPELINE_DOCTOR_REASONER=anthropic` or `openai`, plus the provider's API key. If the provider fails, the reasoner falls back to the heuristic reasoner one step at a time, so an outage degrades the diagnosis instead of failing it.
@@ -154,24 +154,43 @@ The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=
 
 ## Evals
 
-[`evals/cases.py`](src/pipeline_doctor/evals/cases.py) defines 26 faults across all 10 categories, plus 10 hard variants that add a misleading recent commit: a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage. That makes 36 cases. For each case the harness:
+The catalogue has two splits:
+
+- `dev`: [`evals/cases.py`](src/pipeline_doctor/evals/cases.py), 26 faults across all 10 categories plus 10 hard variants that add a misleading recent commit (a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage). The heuristic reasoner was written against these 36 cases.
+- `holdout`: 12 cases nobody tuned against. [`holdout.py`](src/pipeline_doctor/evals/holdout.py) has 7 single faults on new tables, columns, and mechanisms: an over-broad filter in a staging model, late-arriving customers, a column renamed in a model, a prefixed string id, an aggregate grain change, CDC updates appended as rows, and upper-cased enum values. [`compound.py`](src/pipeline_doctor/evals/compound.py) has 3 cases with two simultaneous faults. [`nofault.py`](src/pipeline_doctor/evals/nofault.py) has 2 runs that fail for infrastructure reasons with green data and no suspect commits: a held DuckDB write lock and an OOM-killed worker. Keep holdout untuned: once a reasoner, prompt, or JEV rule is changed to pass a holdout case, move that case to `dev` and add a fresh one.
+
+For each case and repeat the harness:
 
 1. clones a green workspace (dbt project, git history, DuckDB)
-2. injects the fault: mutates raw data, or commits a code change as a developer would
-3. runs the pipeline exactly like the DAG, and checks that the fault actually breaks it
+2. injects the fault: mutates raw data, commits a code change as a developer would, or reproduces the declared infrastructure failure
+3. runs the pipeline exactly like the DAG, and checks that the run actually fails
 4. runs the agent on the resulting Airflow failure event
-5. scores the **category**, the **culprit** (source table or changed model, plus the column when one is involved), and the **fix**. A code fix only counts if the patch applies, `dbt source freshness && dbt build` goes green afterwards, and every baseline test still runs, so deleting a test does not count as a fix. An operational fix only counts when escalation is the right answer, such as a stale feed or deleted parent rows.
+5. scores each part of the answer separately: **category**, affected **relation**, culprit **column** (when the ground truth names one), **fix kind** (acceptable for the case), and **fix validity**. A code fix only counts if the patch applies, `dbt source freshness && dbt build` goes green afterwards, and every baseline test still runs, so deleting a test does not count as a fix. An operational fix only counts when escalation is the right answer, such as a stale feed or deleted parent rows.
+
+A compound case accepts either fault as the root cause. **Primary hit** means category and relation match one of them, and the patch is validated against that fault alone. A no-fault case is correct when the agent answers `unknown` and proposes no code change. **False-positive rate** is the share of no-fault runs where the agent proposed a code change or named a culprit with confidence at or above `jev_min_confidence`.
 
 Run ids and workspace paths are random, so nothing in the agent's context names the fault. A fault that fails to break the pipeline counts as a miss.
 
-Results go to `evals/results/<run>/` as `summary.md`, `summary.json`, `results.jsonl`, and `spans.jsonl`, with a per-step latency table built from the traces.
+```bash
+uv run pipeline-doctor eval --split holdout          # dev (default, the regression set) | holdout | all
+uv run pipeline-doctor eval --repeats 3 --workers 6  # each run in a fresh workspace
+```
 
-| Reasoner | Category acc. | Culprit acc. | Fix validity | With distractors | JEV proceed | Mean latency | LLM cost |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `heuristic` | 100% (36/36) | 100% | 100% | 100% (10/10) | 100% | 0.11s | $0 |
-| `anthropic` / `openai` | run `pipeline-doctor eval --reasoner anthropic` | | | | | | |
+With `--repeats N` the report adds mean, std dev, min, and max of every metric across repeats, plus per-case agreement (share of repeats with the same outcome). Each split and case kind gets accuracy next to cost, LLM calls, and p50/p95 latency, and the per-case table lists cost, latency, LLM calls, and queries. Results go to `evals/results/<run>/` as `summary.md`, `summary.json`, `results.jsonl`, and `spans.jsonl`, with a per-step latency table built from the traces.
 
-Read the heuristic row as a regression baseline, not a headline. The rules were written alongside the fault catalogue, so they cover every case by construction. They reason from evidence signals rather than case ids, and the eval would catch a regression in any tool, query, or fix template. The interesting comparison is an LLM reasoner on the same harness, together with new held-out faults it has never seen (see roadmap).
+`heuristic`, `--repeats 2` (no LLM, so $0 and 0 LLM calls):
+
+| Slice | Cases x repeats | Category | Relation | Column | Culprit | Fix kind | Fix valid | Primary hit | FP rate | p50 / p95 latency |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `dev` | 36 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.10s / 0.15s |
+| `holdout` (all) | 12 x 2 | 91.7% | 100% | 77.8% | 91.7% | 83.3% | 83.3% | 91.7% | 0% | 0.09s / 0.12s |
+| holdout compound | 3 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.09s / 0.10s |
+| holdout no-fault | 2 x 2 | 100% | 100% | n/a | 100% | 100% | 100% | 100% | 0% | 0.04s / 0.04s |
+| `anthropic` / `openai` | run `pipeline-doctor eval --reasoner anthropic --repeats 3` | | | | | | | | | |
+
+Across both splits JEV proceeds on 89.6% of runs with 100% precision and holds back every wrong diagnosis. Std dev is 0 for every accuracy metric. Per-case agreement is 99%: `compound_null_customer_ids_and_cents` flips between its two causes because dbt reports the two failing tests in nondeterministic order. The two holdout misses are `holdout_type_customers_id_prefixed` (right table, but read as missing rows, so wrong category and column) and `holdout_model_column_renamed` (right category and model at 0.35 confidence, so it escalated instead of patching).
+
+Read the `dev` row as a regression baseline, not a headline: the rules were written alongside those cases. The `holdout` rows and an LLM reasoner with repeats are the numbers to compare.
 
 ## Guardrails
 
@@ -220,7 +239,7 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 234 tests, ~50s (integration tests build real dbt workspaces)
+uv run pytest                 # 281 tests, ~105s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```
@@ -235,6 +254,5 @@ uv run ruff check src tests && uv run ruff format --check src tests
 
 - Run the eval with Claude and GPT reasoners, and publish accuracy against cost and latency.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
-- Held-out faults the heuristic was not tuned on: multi-fault incidents, silent filter regressions, late-arriving dimensions.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.
