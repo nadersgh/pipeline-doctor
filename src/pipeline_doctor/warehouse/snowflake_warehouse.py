@@ -3,18 +3,22 @@ import time
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from pipeline_doctor.warehouse.base import ColumnSpec, QueryResult, WarehouseQueryError, to_cell
+
+_QUERY_TAG = "pipeline-doctor"
 
 
 class SnowflakeConnectionSettings(BaseModel):
     account: str
     user: str
     password: SecretStr
-    role: str
+    # An empty role would silently fall back to the user's default role, which may be able to write.
+    role: str = Field(min_length=1)
     warehouse: str
     database: str
+    statement_timeout_seconds: int = Field(default=30, gt=0)
 
 
 class SnowflakeWarehouse:
@@ -56,7 +60,7 @@ class SnowflakeWarehouse:
     def list_columns(self, schemas: list[str]) -> list[ColumnSpec]:
         placeholders = ", ".join(["%s"] * len(schemas))
         sql = (
-            "select table_catalog, table_schema, table_name, column_name, data_type "
+            "select table_catalog, table_schema, table_name, column_name, data_type, numeric_precision, numeric_scale "
             f"from information_schema.columns where lower(table_schema) in ({placeholders}) "
             "order by table_schema, table_name, ordinal_position"
         )
@@ -65,6 +69,8 @@ class SnowflakeWarehouse:
         try:
             cursor.execute(sql, [schema.lower() for schema in schemas])
             rows = cursor.fetchall()
+        except Exception as error:
+            raise WarehouseQueryError(str(error)) from error
         finally:
             cursor.close()
         return [
@@ -73,9 +79,9 @@ class SnowflakeWarehouse:
                 schema_name=schema.lower(),
                 table=table.lower(),
                 name=name.lower(),
-                data_type=data_type,
+                data_type=_render_data_type(data_type, precision, scale),
             )
-            for database, schema, table, name, data_type in rows
+            for database, schema, table, name, data_type, precision, scale in rows
         ]
 
     def estimate_scanned_bytes(self, sql: str) -> int | None:
@@ -102,6 +108,17 @@ class SnowflakeWarehouse:
                 role=self._settings.role,
                 warehouse=self._settings.warehouse,
                 database=self._settings.database,
-                session_parameters={"QUERY_TAG": "pipeline-doctor", "AUTOCOMMIT": False},
+                session_parameters={
+                    "QUERY_TAG": _QUERY_TAG,
+                    "AUTOCOMMIT": False,
+                    "STATEMENT_TIMEOUT_IN_SECONDS": self._settings.statement_timeout_seconds,
+                },
             )
         return self._connection
+
+
+def _render_data_type(data_type: str, precision: int | None, scale: int | None) -> str:
+    # information_schema reports every exact numeric as NUMBER; the scale separates integers from decimals.
+    if data_type.upper() == "NUMBER" and precision is not None and scale is not None:
+        return f"NUMBER({precision},{scale})"
+    return data_type

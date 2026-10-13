@@ -134,6 +134,8 @@ Read the heuristic row as a regression baseline, not a headline. The rules were 
 | Webhook/Slack spoofing | Bearer token on the API. Slack requests need a valid HMAC signature with a 5-minute replay window, and only users in `PIPELINE_DOCTOR_SLACK_APPROVERS` can approve. |
 | Shell injection | git and dbt run with fixed argument vectors and no shell. Refs and paths are validated. |
 
+**Snowflake status.** Verified: the adapter against a fake connector (role, `QUERY_TAG`, statement timeout, row limit, error mapping, `EXPLAIN` bytes into the budget, `information_schema` columns into schema drift), the guard in the snowflake dialect, and every diagnostic check's SQL transpiled to Snowflake through the guard. Not verified: no live run yet, as there is no CI account. To run the opt-in live pass on a trial account, set `PIPELINE_DOCTOR_SNOWFLAKE_ACCOUNT`/`_USER`/`_PASSWORD` and run `uv run pytest -m snowflake_live`. Role provisioning and details are in [docs/snowflake.md](docs/snowflake.md).
+
 ## Observability
 
 Every graph node and tool call is an OpenTelemetry span (`agent.*`, `tool.*`, `llm.*`) carrying token usage (`gen_ai.usage.*`), cost, query counts, and the diagnosis. Spans always go to `.pipeline_doctor/traces/spans.jsonl`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and headers) to also export them to Langfuse or any OTLP backend. Each incident records latency, LLM calls, tokens, cost in USD, and queries run or blocked.
@@ -165,7 +167,7 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 139 tests, ~45s (integration tests build real dbt workspaces)
+uv run pytest                 # 234 tests, ~50s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```

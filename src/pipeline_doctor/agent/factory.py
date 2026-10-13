@@ -33,6 +33,7 @@ def build_warehouse(settings: Settings) -> Warehouse:
                 role=settings.snowflake_role,
                 warehouse=settings.snowflake_warehouse,
                 database=settings.snowflake_database,
+                statement_timeout_seconds=settings.query_timeout_seconds,
             )
         )
     return DuckDBWarehouse(settings.duckdb_path)

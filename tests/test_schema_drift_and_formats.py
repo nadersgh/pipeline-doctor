@@ -56,7 +56,15 @@ def test_detect_schema_drift_ignores_equivalent_type_spellings(orders_source: Ma
 
 @pytest.mark.parametrize(
     ("declared", "normalized"),
-    [("int", "INTEGER"), ("NUMBER(38,0)", "INTEGER"), ("string", "VARCHAR"), ("TIMESTAMP_NTZ(9)", "TIMESTAMP")],
+    [
+        ("int", "INTEGER"),
+        ("NUMBER(38,0)", "INTEGER"),
+        ("numeric(12, 0)", "INTEGER"),
+        ("NUMBER(10,2)", "DECIMAL"),
+        ("numeric", "DECIMAL"),
+        ("string", "VARCHAR"),
+        ("TIMESTAMP_NTZ(9)", "TIMESTAMP"),
+    ],
 )
 def test_normalize_type_maps_dialect_aliases(declared: str, normalized: str) -> None:
     assert normalize_type(declared) == normalized
