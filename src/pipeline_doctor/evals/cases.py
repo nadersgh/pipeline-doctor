@@ -27,6 +27,22 @@ class DistractorKind(StrEnum):
     UNRELATED_SQL = "unrelated_sql"
 
 
+class EvalSplit(StrEnum):
+    DEV = "dev"
+    HOLDOUT = "holdout"
+
+
+class EvalCaseKind(StrEnum):
+    SINGLE = "single"
+    COMPOUND = "compound"
+    NO_FAULT = "no_fault"
+
+
+class InfraFailureKind(StrEnum):
+    WAREHOUSE_LOCK = "warehouse_lock"
+    WORKER_KILLED = "worker_killed"
+
+
 class EvalCase(BaseModel):
     """One synthetic broken pipeline and the ground truth a correct diagnosis must match."""
 
@@ -39,6 +55,22 @@ class EvalCase(BaseModel):
     data_sql: list[str] = Field(default_factory=list)
     commits: list[InjectedCommit] = Field(default_factory=list)
     distractor: DistractorKind | None = None
+    split: EvalSplit = EvalSplit.DEV
+    components: list["EvalCase"] = Field(
+        default_factory=list, description="Simultaneous faults of a compound case; diagnosing any one is a hit."
+    )
+    infra_failure: InfraFailureKind | None = Field(
+        default=None, description="Pipeline fails for an operational reason outside the project; no fault exists."
+    )
+
+    @property
+    def kind(self) -> EvalCaseKind:
+        if self.infra_failure is not None:
+            return EvalCaseKind.NO_FAULT
+        return EvalCaseKind.COMPOUND if self.components else EvalCaseKind.SINGLE
+
+    def acceptable_causes(self) -> list["EvalCase"]:
+        return self.components or [self]
 
 
 _DISTRACTOR_COMMITS: dict[DistractorKind, InjectedCommit] = {

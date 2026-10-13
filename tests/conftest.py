@@ -20,6 +20,16 @@ from pipeline_doctor.publishing.pull_requests import PullRequest
 from pipeline_doctor.settings import Settings
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # Deselect in a hook rather than addopts so an explicit `-m "not integration"` cannot re-enable live tests.
+    if "snowflake_live" in config.getoption("markexpr"):
+        return
+    deselected = [item for item in items if item.get_closest_marker("snowflake_live")]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [item for item in items if not item.get_closest_marker("snowflake_live")]
+
+
 class RecordingPublisher:
     def __init__(self) -> None:
         self.opened: list[dict[str, str]] = []

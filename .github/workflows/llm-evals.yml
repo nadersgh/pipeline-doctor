@@ -1,0 +1,91 @@
+name: LLM evals
+
+# Report only: scores LLM reasoners on the eval cases and never fails on metrics. Costs real API money,
+# so manual runs can target a case subset.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      reasoner:
+        description: Reasoner to evaluate
+        type: choice
+        options: [anthropic, openai, both]
+        default: anthropic
+      cases:
+        description: Comma-separated case ids to limit cost (empty runs all 36)
+        type: string
+        default: ""
+      workers:
+        description: Parallel cases
+        type: number
+        default: 4
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-evals-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UV_LOCKED: "1"
+
+jobs:
+  eval:
+    name: eval (${{ matrix.reasoner }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        reasoner: ${{ fromJSON(inputs.reasoner == 'anthropic' && '["anthropic"]' || inputs.reasoner == 'openai' && '["openai"]' || '["anthropic", "openai"]') }}
+    env:
+      REASONER: ${{ matrix.reasoner }}
+      CASES: ${{ inputs.cases }}
+      WORKERS: ${{ inputs.workers || 4 }}
+      RUN_DIR: evals/results/llm
+    steps:
+      - name: Check API key
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ matrix.reasoner == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ matrix.reasoner == 'openai' && secrets.OPENAI_API_KEY || '' }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY$OPENAI_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            secret="$(echo "$REASONER" | tr '[:lower:]' '[:upper:]')_API_KEY"
+            echo "::notice title=LLM eval skipped::Repository secret $secret is not set; skipping the $REASONER eval."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.key.outputs.available == 'true'
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        if: steps.key.outputs.available == 'true'
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - if: steps.key.outputs.available == 'true'
+        run: uv python install && uv sync --extra llm
+      - name: LLM eval
+        if: steps.key.outputs.available == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ matrix.reasoner == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ matrix.reasoner == 'openai' && secrets.OPENAI_API_KEY || '' }}
+        run: |
+          uv run --extra llm pipeline-doctor eval --reasoner "$REASONER" --cases "$CASES" \
+            --workers "$WORKERS" --output-dir "$RUN_DIR"
+      - name: Write step summary
+        if: ${{ !cancelled() && steps.key.outputs.available == 'true' }}
+        run: |
+          for summary in "$RUN_DIR"/*/summary.md; do
+            if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && steps.key.outputs.available == 'true' }}
+        with:
+          name: eval-${{ matrix.reasoner }}
+          path: ${{ env.RUN_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
