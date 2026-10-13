@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: One row per order with payment totals in dollars.
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        tests:
+          - not_null
+
+  - name: dim_customers
+    description: One row per customer with lifetime order metrics.
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+
+exposures:
+  - name: revenue_dashboard
+    label: Revenue dashboard
+    type: dashboard
+    maturity: high
+    owner:
+      name: Finance analytics
+      email: finance-analytics@example.com
+    description: Daily revenue and order volume used by the finance team.
+    depends_on:
+      - ref('fct_orders')
+
+  - name: customer_360
+    label: Customer 360
+    type: dashboard
+    maturity: medium
+    owner:
+      name: Growth team
+      email: growth@example.com
+    description: Customer lifetime value and retention for the growth team.
+    depends_on:
+      - ref('dim_customers')

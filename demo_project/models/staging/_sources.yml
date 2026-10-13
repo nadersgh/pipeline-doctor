@@ -1,0 +1,52 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Raw tables landed by the ingestion service, one batch per day.
+    schema: raw
+    loaded_at_field: _loaded_at
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 36, period: hour}
+    tables:
+      - name: customers
+        description: Customer accounts from the storefront database.
+        columns:
+          - name: id
+            data_type: INTEGER
+          - name: first_name
+            data_type: VARCHAR
+          - name: last_name
+            data_type: VARCHAR
+          - name: email
+            data_type: VARCHAR
+          - name: created_at
+            data_type: TIMESTAMP
+          - name: _loaded_at
+            data_type: TIMESTAMP
+      - name: orders
+        description: Orders from the storefront database.
+        columns:
+          - name: id
+            data_type: INTEGER
+          - name: customer_id
+            data_type: INTEGER
+          - name: order_date
+            data_type: DATE
+          - name: status
+            data_type: VARCHAR
+          - name: _loaded_at
+            data_type: TIMESTAMP
+      - name: payments
+        description: Payment events from the payment processor, amounts in cents.
+        columns:
+          - name: id
+            data_type: INTEGER
+          - name: order_id
+            data_type: INTEGER
+          - name: payment_method
+            data_type: VARCHAR
+          - name: amount
+            data_type: INTEGER
+          - name: _loaded_at
+            data_type: TIMESTAMP

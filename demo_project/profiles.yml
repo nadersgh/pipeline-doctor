@@ -1,0 +1,8 @@
+pipeline_doctor_demo:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('PIPELINE_DOCTOR_DUCKDB_PATH') }}"
+      schema: analytics
+      threads: 4

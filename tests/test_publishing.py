@@ -1,0 +1,132 @@
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+from pydantic import SecretStr
+
+from pipeline_doctor.incidents.models import Incident, IncidentStatus
+from pipeline_doctor.incidents.repository import IncidentRepository
+from pipeline_doctor.memory.store import IncidentMemory
+from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
+from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher
+from pipeline_doctor.vcs.repository import GitRepository
+from tests.conftest import RecordingPublisher
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    model = tmp_path / "project" / "models" / "staging" / "stg_orders.sql"
+    model.parent.mkdir(parents=True)
+    model.write_text("with source as (\n    select * from {{ source('raw', 'orders') }}\n)\nselect * from source\n")
+    return tmp_path / "project"
+
+
+@pytest.fixture
+def repository(tmp_path: Path) -> IncidentRepository:
+    return IncidentRepository(tmp_path / "incidents")
+
+
+def test_approval_opens_draft_pr_and_records_memory(
+    project: Path,
+    repository: IncidentRepository,
+    pending_incident: Incident,
+    tmp_path: Path,
+    recording_publisher: RecordingPublisher,
+) -> None:
+    # Setup
+    publisher = recording_publisher
+    memory = IncidentMemory(tmp_path / "memory.jsonl")
+    repository.save(pending_incident)
+    service = ApprovalService(repository, publisher, memory, project)
+
+    # Act
+    approved = service.approve(pending_incident.id, "nader")
+
+    # Assert
+    assert approved.status is IncidentStatus.PR_OPENED
+    assert approved.pull_request_url == "https://example.test/pr/1"
+    assert "rename (order_status as status)" in publisher.opened[0]["models/staging/stg_orders.sql"]
+    assert memory.search(pending_incident.signature)[0].incident.incident_id == pending_incident.id
+
+
+def test_approval_refuses_incidents_not_awaiting_review(
+    project: Path,
+    repository: IncidentRepository,
+    pending_incident: Incident,
+    tmp_path: Path,
+    recording_publisher: RecordingPublisher,
+) -> None:
+    # Setup
+    repository.save(pending_incident.model_copy(update={"status": IncidentStatus.REJECTED}))
+    service = ApprovalService(repository, recording_publisher, IncidentMemory(tmp_path / "m.jsonl"), project)
+
+    # Act / Assert
+    with pytest.raises(IncidentApprovalError):
+        service.approve(pending_incident.id, "nader")
+
+
+def test_rejection_records_reviewer_note_without_publishing(
+    project: Path,
+    repository: IncidentRepository,
+    pending_incident: Incident,
+    tmp_path: Path,
+    recording_publisher: RecordingPublisher,
+) -> None:
+    # Setup
+    publisher = recording_publisher
+    repository.save(pending_incident)
+    service = ApprovalService(repository, publisher, IncidentMemory(tmp_path / "m.jsonl"), project)
+
+    # Act
+    rejected = service.reject(pending_incident.id, "lead", "rename is temporary")
+
+    # Assert
+    assert rejected.status is IncidentStatus.REJECTED
+    assert rejected.reviewer_note == "rename is temporary"
+    assert publisher.opened == []
+
+
+def test_local_git_publisher_commits_to_a_branch(project: Path, pending_incident: Incident, tmp_path: Path) -> None:
+    # Setup
+    git = GitRepository(project)
+    git.init()
+    git.commit_all("initial")
+    publisher = LocalGitPublisher(git, tmp_path / "prs")
+
+    # Act
+    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    assert git.show_file(pull_request.branch, "models/staging/stg_orders.sql") == "select 1\n"
+    assert (tmp_path / "prs" / f"{pending_incident.id}.md").read_text().startswith("# [Pipeline Doctor]")
+
+
+def test_github_publisher_opens_a_draft_pull_request(pending_incident: Incident) -> None:
+    # Setup
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else {}
+        calls.append((request.method, request.url.path, body))
+        if request.method == "GET" and "/git/ref/" in request.url.path:
+            return httpx.Response(200, json={"object": {"sha": "base-sha"}})
+        if request.method == "GET" and "/contents/" in request.url.path:
+            return httpx.Response(200, json={"sha": "file-sha"})
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(201, json={"html_url": "https://github.com/acme/dbt/pull/7"})
+        return httpx.Response(201, json={})
+
+    client = httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(handler))
+    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", "analytics", client=client)
+
+    # Act
+    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    put = next(call for call in calls if call[0] == "PUT")
+    pull = next(call for call in calls if call[1].endswith("/pulls"))
+    assert pull_request.url == "https://github.com/acme/dbt/pull/7"
+    assert put[1] == "/repos/acme/dbt/contents/analytics/models/staging/stg_orders.sql"
+    assert put[2]["sha"] == "file-sha"
+    assert pull[2]["draft"] is True
