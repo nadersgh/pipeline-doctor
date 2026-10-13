@@ -7,11 +7,13 @@ import uvicorn
 from loguru import logger
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.table import Table
 
 from pipeline_doctor.agent.fixes import FixApplicationError
 from pipeline_doctor.demo.workspace import DemoWorkspace, create_workspace, run_pipeline
 from pipeline_doctor.evals.cases import list_eval_cases
+from pipeline_doctor.evals.gate import EvalGateError, load_gate
 from pipeline_doctor.evals.harness import EvalHarness
 from pipeline_doctor.evals.injection import inject_fault
 from pipeline_doctor.incidents.models import FailureEvent
@@ -139,14 +141,22 @@ def run_eval(
     work_dir: Annotated[Path, typer.Option()] = Path(".pipeline_doctor/eval_workspaces"),
     output_dir: Annotated[Path, typer.Option()] = Path("evals/results"),
     jev: Annotated[bool | None, typer.Option("--jev/--no-jev", help="Override PIPELINE_DOCTOR_JEV_ENABLED.")] = None,
+    gate: Annotated[
+        Path | None,
+        typer.Option(exists=True, dir_okay=False, help="TOML of minimum scores; exit 1 when a metric drops below."),
+    ] = None,
 ) -> None:
     """Inject every fault into an isolated workspace, diagnose it, and score the agent."""
+    eval_gate = load_gate(gate) if gate else None
     wanted = {item.strip() for item in cases.split(",") if item.strip()}
     selected = [case for case in list_eval_cases() if not wanted or case.case_id in wanted]
     run = EvalHarness(_settings(reasoner, jev), work_dir).run(selected, output_dir, workers)
     summary = (run.output_dir / "summary.md").read_text().split("## Cases")[0]
     console.print(Markdown(summary))
     console.print(f"Per-case results: {run.output_dir / 'summary.md'}")
+    if eval_gate:
+        eval_gate.enforce(run.summary)
+        console.print(f"[green]Eval gate passed[/green] ({gate})")
 
 
 @app.command()
@@ -168,8 +178,8 @@ def mcp() -> None:
 def main() -> None:
     try:
         app()
-    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError) as error:
-        console.print(f"[red]{type(error).__name__}: {error}[/red]")
+    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError, EvalGateError) as error:
+        console.print(f"[red]{type(error).__name__}: {escape(str(error))}[/red]")
         raise SystemExit(1) from error
 
 

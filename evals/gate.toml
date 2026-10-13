@@ -1,0 +1,11 @@
+# Regression gate for `pipeline-doctor eval --gate evals/gate.toml`, enforced in CI.
+# Each value is the minimum the run must reach. Rates are 0..1; `cases` guards against a shrinking catalogue.
+# Change a minimum only in the PR that intentionally changes the score, and say why in the PR description.
+reasoner = "heuristic"
+
+[minimums]
+cases = 36
+category_accuracy = 1.0
+culprit_accuracy = 1.0
+fix_validity = 1.0
+distractor_category_accuracy = 1.0
