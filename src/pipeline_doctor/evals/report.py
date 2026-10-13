@@ -32,6 +32,7 @@ class CaseResult(BaseModel):
     llm_calls: int = 0
     queries_run: int = 0
     queries_blocked: int = 0
+    injection_findings: int = 0
     error: str | None = None
 
     @property

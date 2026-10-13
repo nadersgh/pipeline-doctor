@@ -7,6 +7,7 @@ from pipeline_doctor.dbt_tools.artifacts import ResourceType
 from pipeline_doctor.diagnostics.schema_drift import SchemaDrift
 from pipeline_doctor.incidents.models import FailureEvent
 from pipeline_doctor.memory.store import SimilarIncident
+from pipeline_doctor.security.untrusted import InjectionFinding, UntrustedSource, fence
 from pipeline_doctor.vcs.history import CommitChange
 
 _ERROR_LINE = re.compile(r"(error|fail|exception|not found|warn)", re.IGNORECASE)
@@ -53,6 +54,7 @@ class IncidentContext(BaseModel):
     commits: list[CommitChange] = Field(default_factory=list)
     similar_incidents: list[SimilarIncident] = Field(default_factory=list)
     gathering_warnings: list[str] = Field(default_factory=list)
+    injection_findings: list[InjectionFinding] = Field(default_factory=list)
     source_loaded_at_columns: dict[str, str] = Field(default_factory=dict)
     source_consumer_files: dict[str, list[str]] = Field(
         default_factory=dict, description="Source short name -> files of models selecting from it directly."
@@ -66,7 +68,10 @@ class IncidentContext(BaseModel):
     )
 
     def render_project_files(self) -> str:
-        return "\n\n".join(f"### {path}\n```\n{content}\n```" for path, content in sorted(self.project_files.items()))
+        return "\n\n".join(
+            f"### {path}\n" + fence(f"```\n{content}\n```", UntrustedSource.PROJECT_FILE, path)
+            for path, content in sorted(self.project_files.items())
+        )
 
     def signature(self) -> str:
         if self.primary is None:
@@ -78,13 +83,14 @@ class IncidentContext(BaseModel):
 
     def render(self) -> str:
         """Compact, prompt-ready description of everything gathered about the incident."""
+        failures = _bullets([failure.describe() for failure in self.failures]) or "- none parsed from artifacts"
         sections = [
             f"## Trigger\n{self.event.describe()} at {self.event.occurred_at:%Y-%m-%d %H:%M UTC}",
-            "## Failing dbt nodes\n"
-            + _bullets([failure.describe() for failure in self.failures] or ["none parsed from artifacts"]),
-            f"## Primary failure\n{self.primary.describe() if self.primary else 'unknown (see log)'}",
+            "## Failing dbt nodes\n" + fence(failures, UntrustedSource.DBT_RESULT),
+            "## Primary failure\n"
+            + (fence(self.primary.describe(), UntrustedSource.DBT_RESULT) if self.primary else "unknown (see log)"),
             _code_section(self.primary),
-            f"## Task log excerpt\n```\n{self.log_excerpt or '(empty)'}\n```",
+            "## Task log excerpt\n" + fence(f"```\n{self.log_excerpt or '(empty)'}\n```", UntrustedSource.TASK_LOG),
             "## Lineage\n"
             + _bullets(
                 [
@@ -94,20 +100,27 @@ class IncidentContext(BaseModel):
                 ]
             ),
             "## Schema drift vs declared source columns\n"
-            + _bullets([drift.describe() for drift in self.schema_drift] or ["no drift on upstream sources"]),
+            + (
+                _fenced_bullets([drift.describe() for drift in self.schema_drift], UntrustedSource.SCHEMA_DRIFT)
+                or "- no drift on upstream sources"
+            ),
             "## Commits since last green run\n" + _render_commits(self.commits),
             "## Similar past incidents\n"
-            + _bullets(
-                [
-                    f"{item.incident.category} on {item.incident.culprit} (similarity {item.similarity}): "
-                    f"{item.incident.resolution}"
-                    for item in self.similar_incidents
-                ]
-                or ["none"]
+            + (
+                _fenced_bullets(
+                    [
+                        f"{item.incident.category} on {item.incident.culprit} (similarity {item.similarity}): "
+                        f"{item.incident.resolution}"
+                        for item in self.similar_incidents
+                    ],
+                    UntrustedSource.PAST_INCIDENT,
+                )
+                or "- none"
             ),
         ]
-        if self.gathering_warnings:
-            sections.append("## Context gathering warnings\n" + _bullets(self.gathering_warnings))
+        warnings = [*self.gathering_warnings, *(finding.describe() for finding in self.injection_findings)]
+        if warnings:
+            sections.append("## Context gathering warnings\n" + _bullets(warnings))
         return "\n\n".join(section for section in sections if section)
 
 
@@ -126,10 +139,15 @@ def _bullets(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _fenced_bullets(items: list[str], source: UntrustedSource) -> str:
+    return fence(_bullets(items), source) if items else ""
+
+
 def _code_section(primary: FailedNode | None) -> str:
     if primary is None or not primary.compiled_code:
         return ""
-    return f"## Compiled SQL of the primary failure\n```sql\n{primary.compiled_code[:2500]}\n```"
+    code = fence(f"```sql\n{primary.compiled_code[:2500]}\n```", UntrustedSource.COMPILED_SQL)
+    return f"## Compiled SQL of the primary failure\n{code}"
 
 
 def _render_commits(commits: list[CommitChange]) -> str:
@@ -139,4 +157,4 @@ def _render_commits(commits: list[CommitChange]) -> str:
     for commit in commits:
         diff = f"\n```diff\n{commit.diff}\n```" if commit.diff else ""
         blocks.append(f"- {commit.describe()}{diff}")
-    return "\n".join(blocks)
+    return fence("\n".join(blocks), UntrustedSource.GIT_HISTORY)

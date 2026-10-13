@@ -11,6 +11,7 @@ from pipeline_doctor.agent.reasoning.prompts import (
 )
 from pipeline_doctor.diagnostics.checks import CheckRequest
 from pipeline_doctor.incidents.models import Diagnosis, FileEdit, FixKind, FixProposal
+from pipeline_doctor.security.untrusted import UntrustedSource, fence
 
 _MAX_PRE_CHANGE_CHARS = 12_000
 
@@ -72,9 +73,9 @@ class LLMReasoner:
             f"### {key}\n```\n{content}\n```" for key, content in sorted(context.pre_change_files.items())
         )[:_MAX_PRE_CHANGE_CHARS]
         prompt = FIX_INSTRUCTIONS.format(
-            diagnosis=diagnosis,
+            diagnosis=fence(diagnosis, UntrustedSource.AGENT_OUTPUT),
             files=context.render_project_files(),
-            pre_change=pre_change or "(no suspect commits)",
+            pre_change=fence(pre_change, UntrustedSource.GIT_HISTORY) if pre_change else "(no suspect commits)",
             feedback=f"## Feedback on your previous attempt\n{feedback}" if feedback else "",
             fix_kinds=render_fix_kinds(),
             dialect=self._dialect,

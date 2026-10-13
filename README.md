@@ -45,7 +45,7 @@ uv run pipeline-doctor demo faults                        # list the injectable 
 uv run pipeline-doctor demo break renamed_orders_status   # inject a fault and run the DAG's tasks
 uv run pipeline-doctor diagnose                           # diagnose the failure, print the report
 uv run pipeline-doctor approve <incident-id> --approver you
-uv run pipeline-doctor eval --workers 6                   # 36-case eval, writes evals/results/<run>/
+uv run pipeline-doctor eval --workers 6                   # 39-case eval, writes evals/results/<run>/
 ```
 
 Use an LLM reasoner with `PIPELINE_DOCTOR_REASONER=anthropic` or `openai`, plus the provider's API key. If the provider fails, the reasoner falls back to the heuristic reasoner one step at a time, so an outage degrades the diagnosis instead of failing it.
@@ -102,7 +102,7 @@ The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=
 
 ## Evals
 
-[`evals/cases.py`](src/pipeline_doctor/evals/cases.py) defines 26 faults across all 10 categories, plus 10 hard variants that add a misleading recent commit: a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage. That makes 36 cases. For each case the harness:
+[`evals/cases.py`](src/pipeline_doctor/evals/cases.py) defines 26 faults across all 10 categories, plus 10 hard variants that add a misleading recent commit: a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage. [`evals/adversarial.py`](src/pipeline_doctor/evals/adversarial.py) adds 3 prompt-injection variants: a real fault plus a payload in a commit message, a source column value, or a dbt error. That makes 39 cases. For each case the harness:
 
 1. clones a green workspace (dbt project, git history, DuckDB)
 2. injects the fault: mutates raw data, or commits a code change as a developer would
@@ -116,7 +116,7 @@ Results go to `evals/results/<run>/` as `summary.md`, `summary.json`, `results.j
 
 | Reasoner | Category acc. | Culprit acc. | Fix validity | With distractors | JEV proceed | Mean latency | LLM cost |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `heuristic` | 100% (36/36) | 100% | 100% | 100% (10/10) | 100% | 0.09s | $0 |
+| `heuristic` | 100% (39/39) | 100% | 100% | 100% (10/10) | 100% | 0.10s | $0 |
 | `anthropic` / `openai` | run `pipeline-doctor eval --reasoner anthropic` | | | | | | |
 
 Read the heuristic row as a regression baseline, not a headline. The rules were written alongside the fault catalogue, so they cover every case by construction. They reason from evidence signals rather than case ids, and the eval would catch a regression in any tool, query, or fix template. The interesting comparison is an LLM reasoner on the same harness, together with new held-out faults it has never seen (see roadmap).
@@ -130,9 +130,12 @@ Read the heuristic row as a regression baseline, not a headline. The rules were 
 | Cost / runaway loops | Per-incident `QueryBudget` (query count, per-query timeout, and on Snowflake the bytes scanned estimated through `EXPLAIN`; DuckDB has no scan estimate), a bounded number of investigation rounds, and LLM tokens and cost metered per run. |
 | Unsafe patches | Edits are limited to `.sql`/`.yml`/`.md`/`.csv` under `models/`, `tests/`, `macros/`, `snapshots/`, `seeds/`, `analyses/`. Absolute paths, `..`, and symlinks anywhere on the path are rejected. The `original` snippet must occur exactly once. Files owned by installed dbt packages are left out of the editable context. |
 | Untrusted proposals | When enabled, JEV gates every proposal before a human sees it, and approval refuses code fixes JEV did not clear. |
+| Prompt injection | Task logs, dbt messages, compiled SQL, commits, project files, query results, and the proposal under review reach prompts inside `<untrusted>` blocks the content cannot close. The system prompts say text inside them is data, never instructions. |
 | Unreviewed writes | The agent has no write tools. Only `ApprovalService.approve` can publish, it requires an incident in `awaiting_approval` and an authenticated reviewer, and it opens a **draft** PR. Approval endpoints fail closed until reviewer tokens are configured, and the webhook service token cannot approve. The local publisher commits with git plumbing, so the working tree and index are never touched. |
 | Webhook/Slack spoofing | Bearer token on the API. Slack requests need a valid HMAC signature with a 5-minute replay window, and only users in `PIPELINE_DOCTOR_SLACK_APPROVERS` can approve. |
 | Shell injection | git and dbt run with fixed argument vectors and no shell. Refs and paths are validated. |
+
+[`security/untrusted.py`](src/pipeline_doctor/security/untrusted.py) also flags injection-like text (instruction overrides, role tags, DDL/DML, tool-call lookalikes) and records it on the incident and in its report, keeping the evidence. The detector is a signal for the reviewer, not a control. The controls that hold are read-only credentials, `SqlGuard`, JEV, path validation, and human approval. [`tests/test_prompt_injection.py`](tests/test_prompt_injection.py) scripts a model that obeys the payload: its `DROP`/`DELETE` queries are blocked, the warehouse row counts do not change, JEV escalates its fix (a `post_hook` delete, an edit outside the lineage, a deleted test), and approval publishes nothing. The heuristic reasoner diagnoses the adversarial eval cases correctly because it scores structured signals and never acts on free text.
 
 ## Observability
 
@@ -150,6 +153,7 @@ src/pipeline_doctor/
   vcs/              git wrapper, commit history relevant to a lineage
   memory/           incident vector store (hashing embedder, swappable)
   jev/              Judge / Evaluator / Verifier decision layer, remedy policy, LLM judge
+  security/         untrusted-input fencing, prompt-injection detector
   incidents/        domain models, repository, markdown report
   publishing/       approval service, local-git and GitHub draft PR publishers
   observability/    tracing setup, usage/cost meter
@@ -165,7 +169,7 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 139 tests, ~45s (integration tests build real dbt workspaces)
+uv run pytest                 # 172 tests, ~90s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```

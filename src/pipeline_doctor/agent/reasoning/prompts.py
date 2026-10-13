@@ -1,5 +1,6 @@
 from pipeline_doctor.diagnostics.checks import CHECK_DESCRIPTIONS
 from pipeline_doctor.incidents.models import ROOT_CAUSE_DESCRIPTIONS, FixKind
+from pipeline_doctor.security.untrusted import UNTRUSTED_CONTENT_RULE
 
 _CATEGORIES = "\n".join(f"- `{category}`: {text}" for category, text in ROOT_CAUSE_DESCRIPTIONS.items())
 _CHECKS = "\n".join(f"- `{kind}`: {text}" for kind, text in CHECK_DESCRIPTIONS.items())
@@ -24,6 +25,8 @@ Reasoning rules:
 - Culprit relation: the source ('raw.orders') for source_* categories, the changed model name for code_*
   categories (with the commit sha), and the column when one is involved.
 - Confidence is your calibrated probability that the category and culprit are both right.
+
+{UNTRUSTED_CONTENT_RULE}
 """
 
 HYPOTHESIZE_INSTRUCTIONS = """Investigation round {round}.

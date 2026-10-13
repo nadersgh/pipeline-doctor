@@ -154,6 +154,7 @@ def _metrics(incident: Incident) -> dict[str, object]:
         "llm_calls": metrics.llm_calls,
         "queries_run": metrics.queries_run,
         "queries_blocked": metrics.queries_blocked,
+        "injection_findings": len(incident.injection_findings),
     }
 
 

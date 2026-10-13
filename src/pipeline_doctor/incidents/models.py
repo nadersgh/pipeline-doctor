@@ -5,6 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from pipeline_doctor.jev.models import JevVerdict
+from pipeline_doctor.security.untrusted import InjectionFinding
 
 
 class FailureSource(StrEnum):
@@ -135,6 +136,9 @@ class Incident(BaseModel):
     metrics: RunMetrics = Field(default_factory=RunMetrics)
     reasoner: str = ""
     signature: str = Field(default="", description="Failure fingerprint used to recall similar incidents.")
+    injection_findings: list[InjectionFinding] = Field(
+        default_factory=list, description="Injection-like text seen in logs, commits, or query results."
+    )
     error: str | None = None
     reviewer_note: str | None = None
     approved_by: str | None = None

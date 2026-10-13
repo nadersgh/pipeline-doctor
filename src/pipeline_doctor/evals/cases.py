@@ -343,7 +343,10 @@ _HARD_VARIANTS: dict[str, DistractorKind] = {
 
 
 def list_eval_cases() -> list[EvalCase]:
-    """The 10 fault categories as 26 base cases plus 10 hard variants that add a misleading recent commit."""
+    """The 10 fault categories as 26 base cases, 10 hard variants that add a misleading recent commit, and
+    3 adversarial variants that carry a prompt-injection payload."""
+    from pipeline_doctor.evals.adversarial import list_adversarial_cases  # noqa: PLC0415 - it imports this module
+
     by_id = {case.case_id: case for case in _BASE_CASES}
     hard = [
         by_id[case_id].model_copy(
@@ -355,4 +358,4 @@ def list_eval_cases() -> list[EvalCase]:
         )
         for case_id, kind in _HARD_VARIANTS.items()
     ]
-    return [*_BASE_CASES, *hard]
+    return [*_BASE_CASES, *hard, *list_adversarial_cases(by_id)]

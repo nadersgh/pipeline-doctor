@@ -66,6 +66,7 @@ ignore = ["PLR0913", "PLR0917", "PLR2004", "S101", "RUF001", "PLR0911", "PLR0912
 "src/pipeline_doctor/warehouse/*_warehouse.py" = ["S608"]
 # Fault injection SQL is static test-fixture data.
 "src/pipeline_doctor/evals/cases.py" = ["S608"]
+"src/pipeline_doctor/evals/adversarial.py" = ["S608"]
 "src/pipeline_doctor/dbt_tools/artifacts.py" = ["S105"]
 
 [tool.pytest.ini_options]

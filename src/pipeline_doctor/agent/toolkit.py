@@ -21,6 +21,7 @@ from pipeline_doctor.diagnostics.schema_drift import SchemaDrift, detect_schema_
 from pipeline_doctor.incidents.models import FailureEvent
 from pipeline_doctor.memory.store import IncidentMemory, SimilarIncident
 from pipeline_doctor.observability.tracing import traced
+from pipeline_doctor.security.untrusted import InjectionFinding, UntrustedSource, scan_for_injection
 from pipeline_doctor.vcs.history import CommitChange, GitHistory
 from pipeline_doctor.vcs.repository import GitCommandError
 from pipeline_doctor.warehouse.base import ColumnSpec, Warehouse
@@ -263,7 +264,10 @@ class ContextGatherer:
             committed_files=self._read_commit_files(commits, before=False),
         )
         return context.model_copy(
-            update={"similar_incidents": self._toolkit.search_similar_incidents(context.signature())}
+            update={
+                "similar_incidents": self._toolkit.search_similar_incidents(context.signature()),
+                "injection_findings": _find_injections(context),
+            }
         )
 
     def _read_log(self, event: FailureEvent, warnings: list[str]) -> str:
@@ -315,6 +319,23 @@ class ContextGatherer:
             tested = self._toolkit.lineage.find(primary.tested_relation or "")
             return tested.unique_id if tested else primary.unique_id
         return primary.unique_id
+
+
+def _find_injections(context: IncidentContext) -> list[InjectionFinding]:
+    candidates = [
+        (context.log_excerpt, UntrustedSource.TASK_LOG, "task log excerpt"),
+        *((failure.message, UntrustedSource.DBT_RESULT, failure.unique_id) for failure in context.failures),
+        *(
+            (failure.compiled_code or "", UntrustedSource.COMPILED_SQL, failure.unique_id)
+            for failure in context.failures
+        ),
+        *(
+            (f"{commit.message}\n{commit.diff}", UntrustedSource.GIT_HISTORY, commit.sha[:8])
+            for commit in context.commits
+        ),
+        *((drift.describe(), UntrustedSource.SCHEMA_DRIFT, drift.source) for drift in context.schema_drift),
+    ]
+    return [finding for candidate in candidates if (finding := scan_for_injection(*candidate))]
 
 
 def _is_stale(generated_at: datetime, event: FailureEvent) -> bool:
