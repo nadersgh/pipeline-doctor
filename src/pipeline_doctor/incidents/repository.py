@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,7 +22,9 @@ class IncidentRepository:
         stamped = incident.model_copy(update={"updated_at": datetime.now(UTC)})
         path = self._path_for(stamped.id)
         logger.debug(f"write incident {path}")
-        path.write_text(stamped.model_dump_json(indent=2))
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(stamped.model_dump_json(indent=2))
+        os.replace(temporary, path)
         return stamped
 
     def get(self, incident_id: str) -> Incident:
