@@ -1,0 +1,70 @@
+# Local end-to-end stack: Airflow runs shop_analytics_daily, its failure callback posts to Pipeline Doctor.
+#   docker compose up --build
+#   Airflow UI  http://localhost:8080  (admin / admin)
+#   Doctor API  http://localhost:8000  (Bearer dev-token)
+# Development credentials only. Do not expose these ports.
+
+x-workspace-env: &workspace-env
+  PIPELINE_DOCTOR_DUCKDB_PATH: /workspace/demo/warehouse.duckdb
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+services:
+  pipeline-doctor:
+    build:
+      context: .
+      dockerfile: docker/pipeline-doctor.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *workspace-env
+      PIPELINE_DOCTOR_DBT_PROJECT_DIR: /workspace/demo/project
+      PIPELINE_DOCTOR_STATE_DIR: /workspace/.pipeline_doctor
+      PIPELINE_DOCTOR_AIRFLOW_BASE_URL: http://airflow:8080
+      PIPELINE_DOCTOR_AIRFLOW_USERNAME: admin
+      PIPELINE_DOCTOR_AIRFLOW_PASSWORD: admin
+      PIPELINE_DOCTOR_API_TOKEN: dev-token
+      PIPELINE_DOCTOR_REVIEWER_TOKENS: '{"you": "dev-reviewer-token"}'
+      PIPELINE_DOCTOR_REASONER: ${PIPELINE_DOCTOR_REASONER:-heuristic}
+      PIPELINE_DOCTOR_JEV_ENABLED: ${PIPELINE_DOCTOR_JEV_ENABLED:-true}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - workspace:/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *workspace-env
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+      DBT_PROJECT_DIR: /workspace/demo/project
+      DBT_PROFILES_DIR: /workspace/demo/project
+      DBT_LOG_PATH: /workspace/demo/project/logs
+      SHOP_ANALYTICS_RETRIES: "0"
+      PIPELINE_DOCTOR_URL: http://pipeline-doctor:8000
+      PIPELINE_DOCTOR_API_TOKEN: dev-token
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - workspace:/workspace
+    command: >
+      bash -c "airflow db migrate
+      && (airflow users create --role Admin --username admin --password admin
+      --email admin@example.com --firstname Admin --lastname User || true)
+      && exec airflow standalone"
+    depends_on:
+      pipeline-doctor:
+        condition: service_healthy
+
+volumes:
+  workspace:
