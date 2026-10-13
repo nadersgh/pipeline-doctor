@@ -141,12 +141,11 @@ def _handle_slack_command(service: DoctorService, form: dict[str, str], approver
     action, incident_id = words
     try:
         if action == "approve":
-            user = form.get("user_name", "")
-            if user not in approvers:
-                return (
-                    f"{user or 'You'} cannot approve fixes; ask an approver listed in PIPELINE_DOCTOR_SLACK_APPROVERS."
-                )
-            incident = service.approvals.approve(incident_id, f"{user} (slack)")
+            user_id = form.get("user_id", "")
+            if not user_id or user_id not in approvers:
+                return "You cannot approve fixes; ask an approver listed in PIPELINE_DOCTOR_SLACK_APPROVERS."
+            user_name = form.get("user_name", "")
+            incident = service.approvals.approve(incident_id, f"{user_name} {user_id} (slack)".strip())
             return f"Approved. {incident.pull_request_url or 'Marked as resolved operationally.'}"
         incident = service.repository.get(incident_id)
     except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError, PublishError) as error:
