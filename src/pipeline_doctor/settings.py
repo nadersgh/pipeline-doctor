@@ -1,7 +1,7 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     github_project_subdir: str = ""
 
     api_token: SecretStr = SecretStr("")
+    allow_unauthenticated: bool = Field(
+        default=False, description="Serve webhooks and incident reads without a bearer token (local development)."
+    )
     reviewer_tokens: dict[str, SecretStr] = Field(
         default_factory=dict, description="Reviewer name -> personal API token; approvals are refused when empty."
     )
@@ -75,6 +78,14 @@ class Settings(BaseSettings):
     slack_webhook_url: SecretStr = SecretStr("")
     slack_signing_secret: SecretStr = SecretStr("")
     public_base_url: str = "http://localhost:8000"
+
+    @model_validator(mode="after")
+    def _require_github_credentials(self) -> "Settings":
+        if self.publisher is PublisherKind.GITHUB and not (
+            self.github_repository and self.github_token.get_secret_value()
+        ):
+            raise ValueError("publisher=github requires github_repository and github_token")
+        return self
 
     @property
     def target_dir(self) -> Path:

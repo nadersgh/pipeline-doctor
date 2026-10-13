@@ -13,6 +13,7 @@ from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
 from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError, PullRequest
+from pipeline_doctor.settings import PublisherKind, Settings
 from pipeline_doctor.vcs.repository import GitRepository
 from tests.conftest import RecordingPublisher
 
@@ -261,3 +262,12 @@ def test_incident_save_leaves_no_temporary_file(repository: IncidentRepository, 
 
     # Assert
     assert [path.suffix for path in (repository._directory).iterdir()] == [".json"]
+
+
+def test_github_publisher_setting_requires_repository_and_token() -> None:
+    # Act / Assert
+    with pytest.raises(ValueError, match="github_repository and github_token"):
+        Settings(publisher=PublisherKind.GITHUB, _env_file=None)
+    assert Settings(
+        publisher=PublisherKind.GITHUB, github_repository="acme/dbt", github_token=SecretStr("t"), _env_file=None
+    )
