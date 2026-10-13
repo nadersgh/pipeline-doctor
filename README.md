@@ -4,29 +4,29 @@ Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs.
 
 ## Results
 
-36 injected faults across 10 root-cause categories. Each case breaks a real dbt project on DuckDB, runs the agent on the Airflow failure, then applies its fix and rebuilds. Heuristic run from 2026-10-13, JEV on.
+39 injected faults across 10 root-cause categories (the `dev` split, 3 of them carrying prompt-injection payloads). Each case breaks a real dbt project on DuckDB, runs the agent on the Airflow failure, then applies its fix and rebuilds. Heuristic run from 2026-10-13, JEV on.
 
 | Fault type (root-cause category) | Cases | Heuristic: category | Heuristic: culprit | Heuristic: fix valid | LLM (Claude / GPT) |
 | --- | --- | --- | --- | --- | --- |
-| `source_column_renamed` | 4 | 100% | 100% | 100% | pending |
+| `source_column_renamed` | 5 | 100% | 100% | 100% | pending |
 | `source_type_changed` | 3 | 100% | 100% | 100% | pending |
-| `source_null_spike` | 4 | 100% | 100% | 100% | pending |
+| `source_null_spike` | 5 | 100% | 100% | 100% | pending |
 | `source_duplicate_rows` | 4 | 100% | 100% | 100% | pending |
 | `source_stale` | 4 | 100% | 100% | 100% | pending |
 | `source_new_category` | 4 | 100% | 100% | 100% | pending |
 | `source_missing_rows` | 3 | 100% | 100% | 100% | pending |
-| `code_sql_error` | 4 | 100% | 100% | 100% | pending |
+| `code_sql_error` | 5 | 100% | 100% | 100% | pending |
 | `code_join_fanout` | 3 | 100% | 100% | 100% | pending |
 | `code_logic_regression` | 3 | 100% | 100% | 100% | pending |
-| **All** | **36** | **100%** | **100%** | **100%** | pending |
+| **All** | **39** | **100%** | **100%** | **100%** | pending |
 
 | Metric | Heuristic | LLM |
 | --- | --- | --- |
 | Category accuracy with a misleading recent commit | 100% (10/10) | pending |
 | JEV proceed rate / precision | 100% / 100% | pending |
-| Latency per incident, mean / p95 | 0.11s / 0.20s | pending |
-| Diagnostic queries per incident, mean | 1.69 | pending |
-| LLM cost, all 36 cases | $0 | pending |
+| Latency per incident, mean / p95 | 0.10s / 0.19s | pending |
+| Diagnostic queries per incident, mean | 1.67 | pending |
+| LLM cost, all 39 cases | $0 | pending |
 
 A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, or when the agent correctly escalates to the data owner. The heuristic reasoner was written alongside the fault catalogue, so it covers every case by construction: read it as a regression baseline, not a headline. The LLM columns are pending until I run the same harness with an API key:
 
@@ -84,7 +84,7 @@ Airflow on_failure_callback ──► POST /webhooks/airflow ──► incident
 - **Snippet edits, validated before anyone sees them.** A fix is a list of exact `original` → `replacement` snippets that must match once, inside dbt folders, with no `..` or symlinks. Snippets avoid the line-number bookkeeping that makes model-written unified diffs fail to apply, and verifying one is a string match. They suit hotfixes, not refactors.
 - **JEV is a rule gate, the LLM only vetoes.** The rules are deterministic, free, and name each failed check. The optional LLM judge can hold back a `proceed` but cannot overturn a rule failure, so a persuasive model cannot argue past a removed test. Rules only catch what I anticipated, and the eval has no wrong diagnoses yet (catch rate n/a), so JEV's value is unmeasured. The adversarial eval on the roadmap is the fix.
 - **Hashing embedder for incident memory.** Signed feature hashing of unigrams and bigrams into 512 dimensions: no model download, deterministic in tests. It matches recurring failures that share table and error tokens and misses paraphrases. `TextEmbedder` is a protocol, so a real embedding model is a one-class swap once there is incident history to evaluate it on.
-- **DuckDB for the demo, Snowflake not exercised live.** DuckDB lets the eval clone 36 workspaces and run them on a laptop in about a minute with 6 workers. The Snowflake adapter (`QUERY_TAG`, statement timeout, `EXPLAIN` scan estimate) and sqlglot transpilation of fix SQL exist, but only the guard's Snowflake dialect is unit-tested. I would run the eval against a Snowflake account before claiming support.
+- **DuckDB for the demo, Snowflake not exercised live.** DuckDB lets the eval clone 51 workspaces and run them on a laptop in about a minute with 6 workers. The Snowflake adapter (`QUERY_TAG`, statement timeout, `EXPLAIN` scan estimate) and sqlglot transpilation of fix SQL exist, but only the guard's Snowflake dialect is unit-tested. I would run the eval against a Snowflake account before claiming support.
 - **Airflow 2.10, not 3.** The stack pins `apache/airflow:2.10.5`, and the log reader calls the `/api/v1` REST API, which Airflow 3 replaces with `/api/v2`. Porting the log reader and re-testing the callback is the main work.
 - **FastAPI background tasks, not a queue.** The webhook stores the incident and runs the diagnosis in a `BackgroundTasks` job in the same process, and incidents are JSON files on disk. That is enough for one team and a demo. A restart drops in-flight diagnoses and two replicas would race on the files, so production needs a durable job queue and a database-backed repository.
 
@@ -97,7 +97,7 @@ uv run pipeline-doctor demo faults                        # list the injectable 
 uv run pipeline-doctor demo break renamed_orders_status   # inject a fault and run the DAG's tasks
 uv run pipeline-doctor diagnose                           # diagnose the failure, print the report
 uv run pipeline-doctor approve <incident-id> --approver you
-uv run pipeline-doctor eval --workers 6                   # 36-case dev eval, writes evals/results/<run>/
+uv run pipeline-doctor eval --workers 6                   # 39-case dev eval, writes evals/results/<run>/
 ```
 
 Use an LLM reasoner with `PIPELINE_DOCTOR_REASONER=anthropic` or `openai`, plus the provider's API key. If the provider fails, the reasoner falls back to the heuristic reasoner one step at a time, so an outage degrades the diagnosis instead of failing it.
@@ -156,7 +156,7 @@ The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=
 
 The catalogue has two splits:
 
-- `dev`: [`evals/cases.py`](src/pipeline_doctor/evals/cases.py), 26 faults across all 10 categories plus 10 hard variants that add a misleading recent commit (a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage). The heuristic reasoner was written against these 36 cases.
+- `dev`: [`evals/cases.py`](src/pipeline_doctor/evals/cases.py), 26 faults across all 10 categories plus 10 hard variants that add a misleading recent commit (a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage). [`evals/adversarial.py`](src/pipeline_doctor/evals/adversarial.py) adds 3 prompt-injection variants: a real fault plus a payload in a commit message, a source column value, or a dbt error. The heuristic reasoner was written against the 36 non-adversarial cases.
 - `holdout`: 12 cases nobody tuned against. [`holdout.py`](src/pipeline_doctor/evals/holdout.py) has 7 single faults on new tables, columns, and mechanisms: an over-broad filter in a staging model, late-arriving customers, a column renamed in a model, a prefixed string id, an aggregate grain change, CDC updates appended as rows, and upper-cased enum values. [`compound.py`](src/pipeline_doctor/evals/compound.py) has 3 cases with two simultaneous faults. [`nofault.py`](src/pipeline_doctor/evals/nofault.py) has 2 runs that fail for infrastructure reasons with green data and no suspect commits: a held DuckDB write lock and an OOM-killed worker. Keep holdout untuned: once a reasoner, prompt, or JEV rule is changed to pass a holdout case, move that case to `dev` and add a fresh one.
 
 For each case and repeat the harness:
@@ -182,13 +182,13 @@ With `--repeats N` the report adds mean, std dev, min, and max of every metric a
 
 | Slice | Cases x repeats | Category | Relation | Column | Culprit | Fix kind | Fix valid | Primary hit | FP rate | p50 / p95 latency |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `dev` | 36 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.10s / 0.15s |
-| `holdout` (all) | 12 x 2 | 91.7% | 100% | 77.8% | 91.7% | 83.3% | 83.3% | 91.7% | 0% | 0.09s / 0.12s |
-| holdout compound | 3 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.09s / 0.10s |
+| `dev` | 39 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.10s / 0.16s |
+| `holdout` (all) | 12 x 2 | 91.7% | 100% | 77.8% | 91.7% | 83.3% | 83.3% | 91.7% | 0% | 0.09s / 0.13s |
+| holdout compound | 3 x 2 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | n/a | 0.10s / 0.12s |
 | holdout no-fault | 2 x 2 | 100% | 100% | n/a | 100% | 100% | 100% | 100% | 0% | 0.04s / 0.04s |
 | `anthropic` / `openai` | run `pipeline-doctor eval --reasoner anthropic --repeats 3` | | | | | | | | | |
 
-Across both splits JEV proceeds on 89.6% of runs with 100% precision and holds back every wrong diagnosis. Std dev is 0 for every accuracy metric. Per-case agreement is 99%: `compound_null_customer_ids_and_cents` flips between its two causes because dbt reports the two failing tests in nondeterministic order. The two holdout misses are `holdout_type_customers_id_prefixed` (right table, but read as missing rows, so wrong category and column) and `holdout_model_column_renamed` (right category and model at 0.35 confidence, so it escalated instead of patching).
+Across both splits JEV proceeds on 90.2% of runs with 100% precision and holds back every wrong diagnosis. Std dev is 0 for every accuracy metric. Per-case agreement is 99%: `compound_null_customer_ids_and_cents` flips between its two causes because dbt reports the two failing tests in nondeterministic order. The two holdout misses are `holdout_type_customers_id_prefixed` (right table, but read as missing rows, so wrong category and column) and `holdout_model_column_renamed` (right category and model at 0.35 confidence, so it escalated instead of patching).
 
 Read the `dev` row as a regression baseline, not a headline: the rules were written alongside those cases. The `holdout` rows and an LLM reasoner with repeats are the numbers to compare.
 
@@ -201,9 +201,12 @@ Read the `dev` row as a regression baseline, not a headline: the rules were writ
 | Cost / runaway loops | Per-incident `QueryBudget` (query count, per-query timeout, and on Snowflake the bytes scanned estimated through `EXPLAIN`; DuckDB has no scan estimate), a bounded number of investigation rounds, and LLM tokens and cost metered per run. |
 | Unsafe patches | Edits are limited to `.sql`/`.yml`/`.md`/`.csv` under `models/`, `tests/`, `macros/`, `snapshots/`, `seeds/`, `analyses/`. Absolute paths, `..`, and symlinks anywhere on the path are rejected. The `original` snippet must occur exactly once. Files owned by installed dbt packages are left out of the editable context. |
 | Untrusted proposals | When enabled, JEV gates every proposal before a human sees it, and approval refuses code fixes JEV did not clear. |
+| Prompt injection | Task logs, dbt messages, compiled SQL, commits, project files, query results, and the proposal under review reach prompts inside `<untrusted>` blocks the content cannot close. The system prompts say text inside them is data, never instructions. |
 | Unreviewed writes | The agent has no write tools. Only `ApprovalService.approve` can publish, it requires an incident in `awaiting_approval` and an authenticated reviewer, and it opens a **draft** PR. Approval endpoints fail closed until reviewer tokens are configured, and the webhook service token cannot approve. The local publisher commits with git plumbing, so the working tree and index are never touched. |
 | Webhook/Slack spoofing | Bearer token on the API. Slack requests need a valid HMAC signature with a 5-minute replay window, and only users in `PIPELINE_DOCTOR_SLACK_APPROVERS` can approve. |
 | Shell injection | git and dbt run with fixed argument vectors and no shell. Refs and paths are validated. |
+
+[`security/untrusted.py`](src/pipeline_doctor/security/untrusted.py) also flags injection-like text (instruction overrides, role tags, DDL/DML, tool-call lookalikes) and records it on the incident and in its report, keeping the evidence. The detector is a signal for the reviewer, not a control. The controls that hold are read-only credentials, `SqlGuard`, JEV, path validation, and human approval. [`tests/test_prompt_injection.py`](tests/test_prompt_injection.py) scripts a model that obeys the payload: its `DROP`/`DELETE` queries are blocked, the warehouse row counts do not change, JEV escalates its fix (a `post_hook` delete, an edit outside the lineage, a deleted test), and approval publishes nothing. The heuristic reasoner diagnoses the adversarial eval cases correctly because it scores structured signals and never acts on free text.
 
 **Snowflake status.** Verified: the adapter against a fake connector (role, `QUERY_TAG`, statement timeout, row limit, error mapping, `EXPLAIN` bytes into the budget, `information_schema` columns into schema drift), the guard in the snowflake dialect, and every diagnostic check's SQL transpiled to Snowflake through the guard. Not verified: no live run yet, as there is no CI account. To run the opt-in live pass on a trial account, set `PIPELINE_DOCTOR_SNOWFLAKE_ACCOUNT`/`_USER`/`_PASSWORD` and run `uv run pytest -m snowflake_live`. Role provisioning and details are in [docs/snowflake.md](docs/snowflake.md).
 
@@ -223,6 +226,7 @@ src/pipeline_doctor/
   vcs/              git wrapper, commit history relevant to a lineage
   memory/           incident vector store (hashing embedder, swappable)
   jev/              Judge / Evaluator / Verifier decision layer, remedy policy, LLM judge
+  security/         untrusted-input fencing, prompt-injection detector
   incidents/        domain models, repository, markdown report
   publishing/       approval service, local-git and GitHub draft PR publishers
   observability/    tracing setup, usage/cost meter
@@ -239,14 +243,14 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 281 tests, ~105s (integration tests build real dbt workspaces)
+uv run pytest                 # 314 tests, ~140s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```
 
 ## CI
 
-- Every PR and push to `main` ([`ci.yml`](.github/workflows/ci.yml)): ruff lint and format check, the full pytest suite, then the heuristic eval on all 36 cases with `--gate evals/gate.toml`. The gate fails the job and lists each metric below its minimum. The eval `summary.md` goes to the job summary and the run folder is uploaded as an artifact.
+- Every PR and push to `main` ([`ci.yml`](.github/workflows/ci.yml)): ruff lint and format check, the full pytest suite, then the heuristic eval on the 39 `dev` cases with `--gate evals/gate.toml`. The gate fails the job and lists each metric below its minimum. The eval `summary.md` goes to the job summary and the run folder is uploaded as an artifact.
 - To change the baseline on purpose, edit the minimums in [`evals/gate.toml`](evals/gate.toml) in the same PR and say why. Check locally with `uv run pipeline-doctor eval --reasoner heuristic --gate evals/gate.toml`.
 - Nightly LLM eval ([`llm-evals.yml`](.github/workflows/llm-evals.yml)): runs the `anthropic` and `openai` reasoners, report only, never gates. Needs repository secrets `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; a reasoner whose secret is missing is skipped with a notice. Manual runs pick the reasoner, a comma-separated case subset to cap API cost, and the worker count.
 

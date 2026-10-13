@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from pipeline_doctor.dbt_tools.artifacts import ManifestNode, ResourceType
 from pipeline_doctor.dbt_tools.lineage import CatalogSchema, DbtLineage
+from pipeline_doctor.security.untrusted import UntrustedSource, fence
 from pipeline_doctor.warehouse.base import CellValue, QueryResult, WarehouseQueryError
 from pipeline_doctor.warehouse.guard import GuardedWarehouse, QueryBudgetExceededError, SqlGuardViolationError
 
@@ -93,10 +94,14 @@ class CheckResult(BaseModel):
     def describe(self) -> str:
         target = ".".join(part for part in [self.request.relation, self.request.column] if part)
         header = f"[{self.request.kind} {target}]".replace(" ]", "]")
+        return f"{header}{' ERROR:' if self.error else ''}\n{fence(self.render_output(), UntrustedSource.QUERY_RESULT)}"
+
+    def render_output(self) -> str:
+        """What the warehouse returned: summary and rows, or the error. May echo source data."""
         if self.error:
-            return f"{header} ERROR: {self.error}"
+            return self.error
         table = f"\n{self.table.to_markdown()}" if self.table and self.table.rows else ""
-        return f"{header} {self.summary}{table}"
+        return f"{self.summary}{table}"
 
 
 class DiagnosticCheckError(ValueError):

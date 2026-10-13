@@ -7,6 +7,12 @@ def render_incident_report(incident: Incident) -> str:
     lines = [f"# Incident {incident.id}: {incident.event.describe()}", "", f"**Status:** {incident.status}"]
     if incident.error:
         lines += ["", f"**Agent error:** {incident.error}"]
+    if incident.injection_findings:
+        lines += [
+            "",
+            "## Untrusted input warnings",
+            *[f"- {finding.describe()}" for finding in incident.injection_findings],
+        ]
     diagnosis = incident.diagnosis
     if diagnosis is not None:
         lines += [

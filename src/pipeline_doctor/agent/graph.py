@@ -26,6 +26,7 @@ from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.jev.reviewer import JevRequest, JevReviewer
 from pipeline_doctor.observability.tracing import traced
 from pipeline_doctor.observability.usage import UsageMeter
+from pipeline_doctor.security.untrusted import UntrustedSource, scan_for_injection
 
 _MAX_FIX_ATTEMPTS = 2
 
@@ -130,6 +131,7 @@ class PipelineDoctor:
                 "verdict": final.verdict,
                 "metrics": metrics,
                 "signature": final.context.signature() if final.context else "",
+                "injection_findings": final.context.injection_findings if final.context else [],
             }
         )
 
@@ -193,7 +195,24 @@ class PipelineDoctor:
                 seen.add(request.key())
                 results.append(self._toolkit.run_check(request))
             span.set_attribute("checks.run", len(results))
-            return {"evidence": [*state.evidence, *results], "pending_checks": []}
+            update: dict[str, object] = {"evidence": [*state.evidence, *results], "pending_checks": []}
+            # Errors are skipped: a blocked query's error echoes the model's own SQL, not source data.
+            findings = [
+                finding
+                for result in results
+                if result.error is None
+                and (
+                    finding := scan_for_injection(
+                        result.render_output(),
+                        UntrustedSource.QUERY_RESULT,
+                        f"{result.request.kind} on {result.request.relation}",
+                    )
+                )
+            ]
+            if findings and state.context is not None:
+                known = state.context.injection_findings
+                update["context"] = state.context.model_copy(update={"injection_findings": [*known, *findings]})
+            return update
 
     def _assess(self, state: AgentState) -> dict[str, object]:
         with traced("agent.assess", {"round": state.rounds}) as span:
