@@ -40,7 +40,7 @@ def client(
         state_dir=tmp_path / "state",
         api_token=SecretStr(_TOKEN),
         reviewer_tokens={"lead": SecretStr(_REVIEWER_TOKEN)},
-        slack_approvers=["lead"],
+        slack_approvers=["U0LEAD"],
         slack_signing_secret=SecretStr(_SIGNING_SECRET),
         _env_file=None,
     )
@@ -122,7 +122,7 @@ def test_service_token_cannot_approve(client: TestClient) -> None:
 def test_slack_approve_requires_an_allowlisted_user(client: TestClient) -> None:
     # Setup
     incident_id = client.post("/webhooks/airflow", json=_CALLBACK, headers=_AUTH).json()["incident_id"]
-    body = f"text=approve+{incident_id}&user_name=intern".encode()
+    body = f"text=approve+{incident_id}&user_id=U0INTERN&user_name=intern".encode()
 
     # Act
     response = client.post("/slack/commands", content=body, headers=_slack_headers(body))
@@ -156,6 +156,32 @@ def test_slack_explain_command_returns_plain_language_summary(client: TestClient
 
     # Assert
     assert response.json()["text"] == pending_incident.diagnosis.plain_summary
+
+
+def test_slack_approve_ignores_a_handle_that_matches_an_approver_id(client: TestClient) -> None:
+    # Setup
+    incident_id = client.post("/webhooks/airflow", json=_CALLBACK, headers=_AUTH).json()["incident_id"]
+    body = f"text=approve+{incident_id}&user_name=U0LEAD".encode()
+
+    # Act
+    response = client.post("/slack/commands", content=body, headers=_slack_headers(body))
+
+    # Assert
+    assert "cannot approve" in response.json()["text"]
+
+
+def test_slack_approve_accepts_an_allowlisted_user_id(client: TestClient) -> None:
+    # Setup
+    incident_id = client.post("/webhooks/airflow", json=_CALLBACK, headers=_AUTH).json()["incident_id"]
+    body = f"text=approve+{incident_id}&user_id=U0LEAD&user_name=lead".encode()
+
+    # Act
+    response = client.post("/slack/commands", content=body, headers=_slack_headers(body))
+    incident = client.get(f"/incidents/{incident_id}", headers=_AUTH).json()
+
+    # Assert
+    assert response.json()["text"].startswith("Approved")
+    assert incident["approved_by"] == "lead U0LEAD (slack)"
 
 
 def test_slack_command_with_bad_signature_is_rejected(client: TestClient) -> None:
