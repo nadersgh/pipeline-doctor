@@ -17,6 +17,10 @@ _PR_FOOTER = (
 )
 
 
+class PublishError(RuntimeError):
+    """The code host refused or failed a publish step; the incident stays pending so approval can be retried."""
+
+
 class PullRequest(BaseModel):
     url: str
     branch: str
@@ -84,9 +88,13 @@ class GitHubPublisher:
         repo = f"/repos/{self._repository}"
         logger.info(f"create github branch {self._repository}:{branch}")
         base = self._request("GET", f"{repo}/git/ref/heads/{quote(self._base_branch)}").json()
-        self._request("POST", f"{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": base["object"]["sha"]})
+        self._create_or_reset_branch(repo, branch, base["object"]["sha"])
         for path, content in sorted(files.items()):
             self._put_file(repo, branch, f"{self._prefix}{path}", content, title)
+        existing = self._open_pull_request_url(repo, branch)
+        if existing is not None:
+            logger.info(f"github pull request for {self._repository}:{branch} already open")
+            return PullRequest(url=existing, branch=branch, title=title)
         logger.info(f"open github draft pull request {self._repository}:{branch}")
         pull = self._request(
             "POST",
@@ -101,6 +109,21 @@ class GitHubPublisher:
         ).json()
         return PullRequest(url=pull["html_url"], branch=branch, title=title)
 
+    def _create_or_reset_branch(self, repo: str, branch: str, sha: str) -> None:
+        """Creates the branch, or force-resets one left behind by an earlier failed attempt."""
+        response = self._client.request("POST", f"{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": sha})
+        if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            logger.info(f"reset existing github branch {branch}")
+            self._request("PATCH", f"{repo}/git/refs/heads/{quote(branch)}", json={"sha": sha, "force": True})
+            return
+        self._raise_for_status(response)
+
+    def _open_pull_request_url(self, repo: str, branch: str) -> str | None:
+        owner = self._repository.split("/")[0]
+        response = self._request("GET", f"{repo}/pulls", params={"head": f"{owner}:{branch}", "state": "open"})
+        pulls = response.json()
+        return pulls[0]["html_url"] if pulls else None
+
     def _put_file(self, repo: str, branch: str, path: str, content: str, message: str) -> None:
         url = f"{repo}/contents/{quote(path)}"
         existing = self._client.get(url, params={"ref": branch})
@@ -114,7 +137,23 @@ class GitHubPublisher:
         logger.info(f"commit github file {path}")
         self._request("PUT", url, json=payload)
 
-    def _request(self, method: str, url: str, json: dict[str, object] | None = None) -> httpx.Response:
-        response = self._client.request(method, url, json=json)
-        response.raise_for_status()
+    def _request(
+        self,
+        method: str,
+        url: str,
+        json: dict[str, object] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        try:
+            response = self._client.request(method, url, json=json, params=params)
+        except httpx.HTTPError as error:
+            raise PublishError(f"github {method} {url} failed: {error}") from error
+        return self._raise_for_status(response)
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> httpx.Response:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise PublishError(f"github {error.request.method} {error.request.url.path} failed: {error}") from error
         return response

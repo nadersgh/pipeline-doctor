@@ -10,7 +10,7 @@ from pipeline_doctor.incidents.repository import IncidentRepository
 from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
-from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher
+from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError
 from pipeline_doctor.vcs.repository import GitRepository
 from tests.conftest import RecordingPublisher
 
@@ -132,6 +132,8 @@ def test_github_publisher_opens_a_draft_pull_request(pending_incident: Incident)
             return httpx.Response(200, json={"object": {"sha": "base-sha"}})
         if request.method == "GET" and "/contents/" in request.url.path:
             return httpx.Response(200, json={"sha": "file-sha"})
+        if request.method == "GET" and request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
         if request.url.path.endswith("/pulls"):
             return httpx.Response(201, json={"html_url": "https://github.com/acme/dbt/pull/7"})
         return httpx.Response(201, json={})
@@ -149,3 +151,71 @@ def test_github_publisher_opens_a_draft_pull_request(pending_incident: Incident)
     assert put[1] == "/repos/acme/dbt/contents/analytics/models/staging/stg_orders.sql"
     assert put[2]["sha"] == "file-sha"
     assert pull[2]["draft"] is True
+
+
+def _github_client(handler: httpx.MockTransport | object) -> httpx.Client:
+    return httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+
+
+def test_github_publisher_resets_a_branch_left_by_a_failed_attempt(pending_incident: Incident) -> None:
+    # Setup
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET" and "/git/ref/" in request.url.path:
+            return httpx.Response(200, json={"object": {"sha": "base-sha"}})
+        if request.method == "POST" and request.url.path.endswith("/git/refs"):
+            return httpx.Response(422, json={"message": "Reference already exists"})
+        if request.method == "GET" and request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        if request.method == "GET":
+            return httpx.Response(404, json={})
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(201, json={"html_url": "https://github.com/acme/dbt/pull/8"})
+        return httpx.Response(200, json={})
+
+    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+
+    # Act
+    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    assert pull_request.url == "https://github.com/acme/dbt/pull/8"
+    assert ("PATCH", f"/repos/acme/dbt/git/refs/heads/pipeline-doctor/{pending_incident.id}") in calls
+
+
+def test_github_publisher_reuses_an_already_open_pull_request(pending_incident: Incident) -> None:
+    # Setup
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET" and "/git/ref/" in request.url.path:
+            return httpx.Response(200, json={"object": {"sha": "base-sha"}})
+        if request.method == "GET" and request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[{"html_url": "https://github.com/acme/dbt/pull/3"}])
+        if request.method == "GET":
+            return httpx.Response(404, json={})
+        return httpx.Response(201, json={})
+
+    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+
+    # Act
+    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    assert pull_request.url == "https://github.com/acme/dbt/pull/3"
+    assert ("POST", "/repos/acme/dbt/pulls") not in calls
+
+
+def test_github_publisher_wraps_api_failures(pending_incident: Incident) -> None:
+    # Setup
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "boom"})
+
+    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+
+    # Act / Assert
+    with pytest.raises(PublishError, match="github GET"):
+        publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})

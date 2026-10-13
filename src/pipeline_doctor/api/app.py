@@ -14,6 +14,7 @@ from pipeline_doctor.incidents.models import FailureEvent, Incident
 from pipeline_doctor.incidents.report import render_incident_report
 from pipeline_doctor.incidents.repository import IncidentNotFoundError
 from pipeline_doctor.publishing.approval import IncidentApprovalError
+from pipeline_doctor.publishing.pull_requests import PublishError
 from pipeline_doctor.service import DoctorService
 from pipeline_doctor.settings import Settings
 
@@ -41,6 +42,13 @@ def create_app(settings: Settings | None = None, service: DoctorService | None =
     @app.exception_handler(FixApplicationError)
     def approval_conflict(_: Request, error: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(error)}, status_code=status.HTTP_409_CONFLICT)
+
+    @app.exception_handler(PublishError)
+    def publish_failed(_: Request, error: PublishError) -> JSONResponse:
+        logger.error(f"publish failed: {error}")
+        return JSONResponse(
+            {"detail": f"publishing failed, retry approval: {error}"}, status_code=status.HTTP_502_BAD_GATEWAY
+        )
 
     reviewer_tokens = {name: token.get_secret_value() for name, token in settings.reviewer_tokens.items()}
     service_token = settings.api_token.get_secret_value()
@@ -141,7 +149,7 @@ def _handle_slack_command(service: DoctorService, form: dict[str, str], approver
             incident = service.approvals.approve(incident_id, f"{user} (slack)")
             return f"Approved. {incident.pull_request_url or 'Marked as resolved operationally.'}"
         incident = service.repository.get(incident_id)
-    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError) as error:
+    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError, PublishError) as error:
         return f"Could not {action} {incident_id}: {error}"
     if action == "status":
         return f"Incident {incident.id} is {incident.status}."

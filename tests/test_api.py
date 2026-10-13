@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from pipeline_doctor.api.app import create_app
 from pipeline_doctor.api.slack import verify_slack_signature
 from pipeline_doctor.incidents.models import FailureEvent, Incident, IncidentStatus
+from pipeline_doctor.publishing.pull_requests import PublishError
 from pipeline_doctor.service import DoctorService
 from pipeline_doctor.settings import Settings
 from tests.conftest import RecordingPublisher
@@ -87,6 +88,24 @@ def test_approve_opens_pr_and_second_approval_conflicts(client: TestClient) -> N
     assert first.json()["status"] == IncidentStatus.PR_OPENED
     assert first.json()["approved_by"] == "lead"
     assert second.status_code == 409
+
+
+def test_failed_publish_returns_502_and_stays_retryable(
+    client: TestClient, recording_publisher: RecordingPublisher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Setup
+    incident_id = client.post("/webhooks/airflow", json=_CALLBACK, headers=_AUTH).json()["incident_id"]
+    monkeypatch.setattr(
+        recording_publisher, "open_draft", lambda *_args: (_ for _ in ()).throw(PublishError("github down"))
+    )
+
+    # Act
+    failed = client.post(f"/incidents/{incident_id}/approve", headers=_REVIEWER_AUTH)
+    status = client.get(f"/incidents/{incident_id}", headers=_AUTH).json()["status"]
+
+    # Assert
+    assert failed.status_code == 502
+    assert status == IncidentStatus.AWAITING_APPROVAL
 
 
 def test_service_token_cannot_approve(client: TestClient) -> None:
