@@ -53,13 +53,20 @@ def demo_faults() -> None:
 
 
 @demo_app.command("break")
-def demo_break(case_id: str, workspace: WorkspaceOption = Path("demo_workspace")) -> None:
+def demo_break(
+    case_id: str,
+    workspace: WorkspaceOption = Path("demo_workspace"),
+    run_after: Annotated[bool, typer.Option("--run/--no-run", help="Run the pipeline after injecting.")] = True,
+) -> None:
     """Inject a fault into the demo workspace and run the pipeline like Airflow would."""
     case = next((item for item in list_eval_cases() if item.case_id == case_id), None)
     if case is None:
         raise typer.BadParameter(f"unknown fault {case_id}; see `pipeline-doctor demo faults`")
     demo = DemoWorkspace(workspace)
     inject_fault(demo, case)
+    if not run_after:
+        console.print(f"[yellow]Injected {case_id}.[/yellow] Trigger the DAG in Airflow to see it fail.")
+        return
     run = run_pipeline(demo, run_id=f"manual__{case_id}")
     if run.failure is None:
         console.print("[yellow]The pipeline still passed; no incident to diagnose.[/yellow]")

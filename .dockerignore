@@ -1,0 +1,11 @@
+.git
+.venv
+.env
+.pipeline_doctor
+.pytest_cache
+.ruff_cache
+**/__pycache__
+demo_workspace
+evals/results
+demo_project/target
+demo_project/logs
