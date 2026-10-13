@@ -10,9 +10,10 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from pipeline_doctor.agent.fixes import FixApplicationError
-from pipeline_doctor.demo.workspace import DemoWorkspace, create_workspace, run_pipeline
-from pipeline_doctor.evals.cases import list_eval_cases
-from pipeline_doctor.evals.harness import EvalHarness
+from pipeline_doctor.demo.workspace import DemoWorkspace, create_workspace
+from pipeline_doctor.evals.catalogue import EvalCaseNotFoundError, SplitFilter, get_case, list_all_cases, select_cases
+from pipeline_doctor.evals.harness import EvalHarness, EvalPlan
+from pipeline_doctor.evals.infra import run_case_pipeline
 from pipeline_doctor.evals.injection import inject_fault
 from pipeline_doctor.incidents.models import FailureEvent
 from pipeline_doctor.incidents.report import render_incident_report
@@ -46,9 +47,9 @@ def demo_setup(workspace: WorkspaceOption = Path("demo_workspace")) -> None:
 @demo_app.command("faults")
 def demo_faults() -> None:
     """List injectable faults (the eval cases)."""
-    table = Table("case id", "category", "title")
-    for case in list_eval_cases():
-        table.add_row(case.case_id, case.category, case.title)
+    table = Table("case id", "split", "kind", "category", "title")
+    for case in list_all_cases():
+        table.add_row(case.case_id, case.split, case.kind, case.category, case.title)
     console.print(table)
 
 
@@ -59,15 +60,16 @@ def demo_break(
     run_after: Annotated[bool, typer.Option("--run/--no-run", help="Run the pipeline after injecting.")] = True,
 ) -> None:
     """Inject a fault into the demo workspace and run the pipeline like Airflow would."""
-    case = next((item for item in list_eval_cases() if item.case_id == case_id), None)
-    if case is None:
-        raise typer.BadParameter(f"unknown fault {case_id}; see `pipeline-doctor demo faults`")
+    try:
+        case = get_case(case_id)
+    except EvalCaseNotFoundError as error:
+        raise typer.BadParameter(f"unknown fault {case_id}; see `pipeline-doctor demo faults`") from error
     demo = DemoWorkspace(workspace)
     inject_fault(demo, case)
     if not run_after:
         console.print(f"[yellow]Injected {case_id}.[/yellow] Trigger the DAG in Airflow to see it fail.")
         return
-    run = run_pipeline(demo, run_id=f"manual__{case_id}")
+    run = run_case_pipeline(demo, case, run_id=f"manual__{case_id}")
     if run.failure is None:
         console.print("[yellow]The pipeline still passed; no incident to diagnose.[/yellow]")
         return
@@ -134,7 +136,11 @@ def reject(
 @app.command("eval")
 def run_eval(
     reasoner: Annotated[ReasonerKind | None, typer.Option(help="Override the configured reasoner.")] = None,
-    cases: Annotated[str, typer.Option(help="Comma-separated case ids; empty runs all.")] = "",
+    cases: Annotated[str, typer.Option(help="Comma-separated case ids; empty runs the whole split.")] = "",
+    split: Annotated[
+        SplitFilter, typer.Option(help="dev: cases the heuristic was written against; holdout: untuned.")
+    ] = SplitFilter.ALL,
+    repeats: Annotated[int, typer.Option(min=1, help="Runs per case, each in a fresh workspace.")] = 1,
     workers: Annotated[int, typer.Option(min=1)] = 4,
     work_dir: Annotated[Path, typer.Option()] = Path(".pipeline_doctor/eval_workspaces"),
     output_dir: Annotated[Path, typer.Option()] = Path("evals/results"),
@@ -142,8 +148,8 @@ def run_eval(
 ) -> None:
     """Inject every fault into an isolated workspace, diagnose it, and score the agent."""
     wanted = {item.strip() for item in cases.split(",") if item.strip()}
-    selected = [case for case in list_eval_cases() if not wanted or case.case_id in wanted]
-    run = EvalHarness(_settings(reasoner, jev), work_dir).run(selected, output_dir, workers)
+    plan = EvalPlan(cases=select_cases(split, wanted), repeats=repeats, split=split)
+    run = EvalHarness(_settings(reasoner, jev), work_dir).run(plan, output_dir, workers)
     summary = (run.output_dir / "summary.md").read_text().split("## Cases")[0]
     console.print(Markdown(summary))
     console.print(f"Per-case results: {run.output_dir / 'summary.md'}")
@@ -168,7 +174,7 @@ def mcp() -> None:
 def main() -> None:
     try:
         app()
-    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError) as error:
+    except (IncidentNotFoundError, IncidentApprovalError, FixApplicationError, EvalCaseNotFoundError) as error:
         console.print(f"[red]{type(error).__name__}: {error}[/red]")
         raise SystemExit(1) from error
 
