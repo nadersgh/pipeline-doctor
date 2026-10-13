@@ -218,10 +218,16 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 139 tests, ~45s (integration tests build real dbt workspaces)
+uv run pytest                 # 156 tests, ~80s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```
+
+## CI
+
+- Every PR and push to `main` ([`ci.yml`](.github/workflows/ci.yml)): ruff lint and format check, the full pytest suite, then the heuristic eval on all 36 cases with `--gate evals/gate.toml`. The gate fails the job and lists each metric below its minimum. The eval `summary.md` goes to the job summary and the run folder is uploaded as an artifact.
+- To change the baseline on purpose, edit the minimums in [`evals/gate.toml`](evals/gate.toml) in the same PR and say why. Check locally with `uv run pipeline-doctor eval --reasoner heuristic --gate evals/gate.toml`.
+- Nightly LLM eval ([`llm-evals.yml`](.github/workflows/llm-evals.yml)): runs the `anthropic` and `openai` reasoners, report only, never gates. Needs repository secrets `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; a reasoner whose secret is missing is skipped with a notice. Manual runs pick the reasoner, a comma-separated case subset to cap API cost, and the worker count.
 
 ## Roadmap
 
