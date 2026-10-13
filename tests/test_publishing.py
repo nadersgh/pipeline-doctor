@@ -146,7 +146,7 @@ def test_github_publisher_opens_a_draft_pull_request(pending_incident: Incident)
 
     # Assert
     put = next(call for call in calls if call[0] == "PUT")
-    pull = next(call for call in calls if call[1].endswith("/pulls"))
+    pull = next(call for call in calls if call[0] == "POST" and call[1].endswith("/pulls"))
     assert pull_request.url == "https://github.com/acme/dbt/pull/7"
     assert put[1] == "/repos/acme/dbt/contents/analytics/models/staging/stg_orders.sql"
     assert put[2]["sha"] == "file-sha"
