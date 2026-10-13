@@ -104,7 +104,7 @@ Use an LLM reasoner with `PIPELINE_DOCTOR_REASONER=anthropic` or `openai`, plus 
 
 Other entry points:
 
-- `uv run pipeline-doctor serve` starts the FastAPI app: webhooks, `GET /incidents/{id}/report`, approve/reject, and a Slack `/doctor explain|status|approve <id>` command with signature verification. Approve and reject need a personal reviewer token (`PIPELINE_DOCTOR_REVIEWER_TOKENS`), and the reviewer's identity is taken from that token. The CLI `approve` command is for operators who already have filesystem access to the deployment.
+- `uv run pipeline-doctor serve` starts the FastAPI app (it refuses to start without `PIPELINE_DOCTOR_API_TOKEN` unless `PIPELINE_DOCTOR_ALLOW_UNAUTHENTICATED=true`): webhooks, `GET /incidents/{id}/report`, approve/reject, and a Slack `/doctor explain|status|approve <id>` command with signature verification. Approve and reject need a personal reviewer token (`PIPELINE_DOCTOR_REVIEWER_TOKENS`), and the reviewer's identity is taken from that token. The CLI `approve` command is for operators who already have filesystem access to the deployment.
 - `uv run pipeline-doctor mcp` serves the same read-only tools over MCP (stdio) for IDEs and chat agents.
 - [airflow/dags/shop_analytics_daily.py](airflow/dags/shop_analytics_daily.py) is the DAG: `dbt source freshness` → `dbt build` → tag `pipeline-doctor/last-green`, with the failure callback wired in.
 

@@ -53,7 +53,12 @@ def create_app(settings: Settings | None = None, service: DoctorService | None =
     reviewer_tokens = {name: token.get_secret_value() for name, token in settings.reviewer_tokens.items()}
     service_token = settings.api_token.get_secret_value()
     if not service_token:
-        logger.warning("PIPELINE_DOCTOR_API_TOKEN is empty: webhooks and incident reads are unauthenticated")
+        if not settings.allow_unauthenticated:
+            raise RuntimeError(
+                "PIPELINE_DOCTOR_API_TOKEN is empty: set it, or set PIPELINE_DOCTOR_ALLOW_UNAUTHENTICATED=true "
+                "to serve webhooks and incident reads without authentication"
+            )
+        logger.warning("PIPELINE_DOCTOR_ALLOW_UNAUTHENTICATED is set: webhooks and incident reads are open")
 
     def require_token(authorization: Annotated[str, Header()] = "") -> None:
         accepted = [token for token in [service_token, *reviewer_tokens.values()] if token]

@@ -196,3 +196,23 @@ def test_verify_slack_signature_rejects_replayed_requests() -> None:
 
     # Act / Assert
     assert verify_slack_signature(SecretStr("k"), old, b"x", signature) is False
+
+
+def test_create_app_refuses_to_start_without_a_service_token(tmp_path: Path) -> None:
+    # Setup
+    settings = Settings(state_dir=tmp_path / "state", _env_file=None)
+
+    # Act / Assert
+    with pytest.raises(RuntimeError, match="API_TOKEN is empty"):
+        create_app(settings, DoctorService(settings))
+
+
+def test_create_app_allows_open_access_only_when_explicit(tmp_path: Path) -> None:
+    # Setup
+    settings = Settings(state_dir=tmp_path / "state", allow_unauthenticated=True, _env_file=None)
+
+    # Act
+    client = TestClient(create_app(settings, DoctorService(settings)))
+
+    # Assert
+    assert client.get("/incidents").status_code == 200
