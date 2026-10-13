@@ -111,6 +111,11 @@ class SqlGuard:
                 raise SqlGuardViolationError("sequence access is not allowed")
 
     def _check_tables(self, statement: exp.Expr) -> None:
+        table_function = next(statement.find_all(exp.TableFromRows), None)
+        if table_function is not None:
+            raise SqlGuardViolationError(
+                f"table functions are not allowed: {table_function.sql(dialect=self._dialect)}"
+            )
         cte_names = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
         for table in statement.find_all(exp.Table):
             if not isinstance(table.this, exp.Identifier):

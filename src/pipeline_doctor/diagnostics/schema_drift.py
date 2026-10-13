@@ -13,6 +13,7 @@ _TYPE_ALIASES = {
     "INT8": "INTEGER",
     "INT64": "INTEGER",
     "NUMBER": "INTEGER",
+    "NUMERIC": "DECIMAL",
     "TEXT": "VARCHAR",
     "STRING": "VARCHAR",
     "CHAR": "VARCHAR",
@@ -21,6 +22,7 @@ _TYPE_ALIASES = {
     "FLOAT8": "DOUBLE",
     "FLOAT": "DOUBLE",
 }
+_EXACT_NUMERIC = re.compile(r"^(NUMBER|NUMERIC|DECIMAL)\(\s*\d+\s*,\s*(\d+)\s*\)$")
 
 
 class TypeChange(BaseModel):
@@ -70,5 +72,10 @@ def detect_schema_drift(source: ManifestNode, actual_columns: list[ColumnSpec]) 
 
 
 def normalize_type(data_type: str) -> str:
-    base = re.sub(r"\(.*\)", "", data_type).strip().upper()
+    upper = data_type.strip().upper()
+    exact_numeric = _EXACT_NUMERIC.match(upper)
+    if exact_numeric:
+        # Snowflake stores every integer type as NUMBER(38,0); only the scale tells integers from decimals.
+        return "INTEGER" if int(exact_numeric.group(2)) == 0 else "DECIMAL"
+    base = re.sub(r"\(.*\)", "", upper).strip()
     return _TYPE_ALIASES.get(base, base)

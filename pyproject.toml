@@ -70,4 +70,7 @@ ignore = ["PLR0913", "PLR0917", "PLR2004", "S101", "RUF001", "PLR0911", "PLR0912
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: runs dbt against a real DuckDB demo workspace (slower)"]
+markers = [
+    "integration: runs dbt against a real DuckDB demo workspace (slower)",
+    "snowflake_live: runs read-only queries against a real Snowflake account; deselected unless -m selects it",
+]

@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_LOCKED: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install
+      - run: uv sync
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install
+      - run: uv sync
+      - run: uv run pytest -q
+
+  eval-gate:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_DIR: evals/results/ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install
+      - run: uv sync
+      - name: Heuristic eval with regression gate
+        id: eval
+        run: uv run pipeline-doctor eval --reasoner heuristic --workers 4 --output-dir "$RUN_DIR" --gate evals/gate.toml
+      - name: Write step summary
+        if: ${{ !cancelled() }}
+        env:
+          EVAL_OUTCOME: ${{ steps.eval.outcome }}
+        run: |
+          if [ "$EVAL_OUTCOME" = "failure" ]; then
+            {
+              echo "> [!CAUTION]"
+              echo "> Eval regression gate failed. The eval step log lists each metric below evals/gate.toml."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          for summary in "$RUN_DIR"/*/summary.md; do
+            if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: eval-heuristic
+          path: ${{ env.RUN_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
