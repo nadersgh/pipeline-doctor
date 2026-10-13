@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from pipeline_doctor.jev.models import JevVerdict
+
 
 class FailureSource(StrEnum):
     AIRFLOW = "airflow"
@@ -129,6 +131,7 @@ class Incident(BaseModel):
     status: IncidentStatus = IncidentStatus.DIAGNOSING
     diagnosis: Diagnosis | None = None
     fix: FixProposal | None = None
+    verdict: JevVerdict | None = Field(default=None, description="JEV decision on the diagnosis and fix.")
     metrics: RunMetrics = Field(default_factory=RunMetrics)
     reasoner: str = ""
     signature: str = Field(default="", description="Failure fingerprint used to recall similar incidents.")

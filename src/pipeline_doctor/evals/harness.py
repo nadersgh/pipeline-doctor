@@ -104,6 +104,8 @@ def _score(base: CaseResult, case: EvalCase, incident: Incident) -> CaseResult:
             "category_correct": diagnosis.category == case.category,
             "culprit_correct": _same_relation(predicted_relation, case.culprit_relation) and column_matches,
             "fix_kind": incident.fix.kind if incident.fix else None,
+            "jev_decision": incident.verdict.decision if incident.verdict else None,
+            "jev_score": incident.verdict.score if incident.verdict else None,
             "error": incident.error,
             **_metrics(incident),
         }

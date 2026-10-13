@@ -5,6 +5,7 @@ from loguru import logger
 from pipeline_doctor.agent.fixes import apply_edits
 from pipeline_doctor.incidents.models import FixKind, Incident, IncidentStatus
 from pipeline_doctor.incidents.repository import IncidentRepository
+from pipeline_doctor.jev.models import JevDecision
 from pipeline_doctor.memory.store import IncidentMemory, PastIncident
 from pipeline_doctor.publishing.pull_requests import PullRequestPublisher
 
@@ -34,6 +35,9 @@ class ApprovalService:
                 update={"status": IncidentStatus.RESOLVED_OPERATIONALLY, "approved_by": approver}
             )
         else:
+            verdict = incident.verdict
+            if verdict is not None and verdict.decision is not JevDecision.PROCEED:
+                raise IncidentApprovalError(f"incident {incident.id}: JEV decision is {verdict.decision}, not proceed")
             files = apply_edits(self._project_dir, fix.edits)
             pull_request = self._publisher.open_draft(incident, files)
             logger.info(f"incident {incident.id} approved by {approver}: {pull_request.url}")

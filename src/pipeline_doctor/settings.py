@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     llm_output_cost_per_mtok: float = 15.0
     max_investigation_rounds: int = 2
 
+    jev_min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    jev_llm_judge: bool = Field(default=False, description="Add an LLM-as-judge veto behind the JEV rule gate.")
+    jev_max_fix_revisions: int = 1
+
     publisher: PublisherKind = PublisherKind.LOCAL_GIT
     github_token: SecretStr = SecretStr("")
     github_repository: str = ""

@@ -4,9 +4,11 @@ from pipeline_doctor.agent.graph import PipelineDoctor
 from pipeline_doctor.agent.reasoning.base import FallbackReasoner, Reasoner
 from pipeline_doctor.agent.reasoning.heuristic import HeuristicReasoner
 from pipeline_doctor.agent.reasoning.llm import LLMReasoner
-from pipeline_doctor.agent.reasoning.llm_clients import AnthropicClient, OpenAIClient
+from pipeline_doctor.agent.reasoning.llm_clients import AnthropicClient, LLMClient, OpenAIClient
 from pipeline_doctor.agent.toolkit import DiagnosticToolkit
 from pipeline_doctor.airflow.logs import AirflowApiLogs, LocalAirflowLogs, TaskLogSource
+from pipeline_doctor.jev.llm_judge import LLMJudge
+from pipeline_doctor.jev.reviewer import JevReviewer, LayeredJev, RuleBasedJev
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.observability.tracing import configure_tracing
 from pipeline_doctor.observability.usage import UsageMeter
@@ -75,10 +77,15 @@ def build_reasoner(settings: Settings, meter: UsageMeter, dialect: str) -> Reaso
     if settings.reasoner is ReasonerKind.HEURISTIC:
         return heuristic
     model = settings.llm_model or _DEFAULT_MODELS[settings.reasoner]
-    client = (
-        AnthropicClient(model, meter) if settings.reasoner is ReasonerKind.ANTHROPIC else OpenAIClient(model, meter)
-    )
-    return FallbackReasoner(LLMReasoner(client, model, dialect), heuristic)
+    return FallbackReasoner(LLMReasoner(_build_llm_client(settings, meter), model, dialect), heuristic)
+
+
+def build_jev(settings: Settings, meter: UsageMeter, project_dir: Path) -> JevReviewer:
+    rules = RuleBasedJev(project_dir, settings.jev_min_confidence)
+    if not settings.jev_llm_judge or settings.reasoner is ReasonerKind.HEURISTIC:
+        return rules
+    model = settings.llm_model or _DEFAULT_MODELS[settings.reasoner]
+    return LayeredJev(rules, LLMJudge(_build_llm_client(settings, meter), model))
 
 
 def build_agent(settings: Settings, memory: IncidentMemory | None = None) -> PipelineDoctor:
@@ -87,7 +94,21 @@ def build_agent(settings: Settings, memory: IncidentMemory | None = None) -> Pip
     meter = UsageMeter(settings.llm_input_cost_per_mtok, settings.llm_output_cost_per_mtok)
     toolkit = build_toolkit(settings, memory or build_memory(settings))
     reasoner = build_reasoner(settings, meter, toolkit.guarded_warehouse.dialect)
-    return PipelineDoctor(toolkit, reasoner, meter, settings.max_investigation_rounds)
+    return PipelineDoctor(
+        toolkit,
+        reasoner,
+        meter,
+        build_jev(settings, meter, toolkit.project_dir),
+        settings.max_investigation_rounds,
+        settings.jev_max_fix_revisions,
+    )
+
+
+def _build_llm_client(settings: Settings, meter: UsageMeter) -> LLMClient:
+    model = settings.llm_model or _DEFAULT_MODELS[settings.reasoner]
+    if settings.reasoner is ReasonerKind.ANTHROPIC:
+        return AnthropicClient(model, meter)
+    return OpenAIClient(model, meter)
 
 
 def _build_log_source(settings: Settings) -> TaskLogSource:

@@ -23,6 +23,7 @@ class Investigation(BaseModel):
     evidence: list[CheckResult] = Field(default_factory=list)
     rounds: int = 0
     diagnosis: Diagnosis | None = None
+    critique: str = Field(default="", description="JEV feedback on the previous diagnosis, when it was rejected.")
 
     def render_evidence(self) -> str:
         if not self.evidence:

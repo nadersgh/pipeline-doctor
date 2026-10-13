@@ -4,9 +4,10 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pipeline_doctor.incidents.models import FixKind, RootCauseCategory
+from pipeline_doctor.jev.models import JevDecision
 
 
 class CaseResult(BaseModel):
@@ -24,12 +25,18 @@ class CaseResult(BaseModel):
     fix_kind: FixKind | None = None
     fix_valid: bool = False
     fix_note: str = ""
+    jev_decision: JevDecision | None = None
+    jev_score: float | None = None
     latency_seconds: float = 0.0
     cost_usd: float = 0.0
     llm_calls: int = 0
     queries_run: int = 0
     queries_blocked: int = 0
     error: str | None = None
+
+    @property
+    def trusted_correctly(self) -> bool:
+        return self.category_correct and self.culprit_correct and self.fix_valid
 
 
 class CategoryRow(BaseModel):
@@ -49,6 +56,9 @@ class EvalSummary(BaseModel):
     culprit_accuracy: float
     fix_validity: float
     distractor_category_accuracy: float
+    jev_proceed_rate: float = 0.0
+    jev_proceed_precision: float = 0.0
+    jev_catch_rate: float | None = Field(default=None, description="None when no diagnosis was wrong.")
     mean_latency_seconds: float
     p95_latency_seconds: float
     total_cost_usd: float
@@ -64,15 +74,23 @@ def summarize(reasoner: str, started_at: datetime, results: list[CaseResult]) ->
         grouped[result.expected_category].append(result)
     latencies = sorted(result.latency_seconds for result in scored) or [0.0]
     distractors = [result for result in scored if result.has_distractor]
+    triggered = [result for result in results if result.fault_triggered]
+    proceeded = [result for result in triggered if result.jev_decision is JevDecision.PROCEED]
+    wrong = [result for result in triggered if not (result.category_correct and result.culprit_correct)]
     return EvalSummary(
         reasoner=reasoner,
         started_at=started_at,
         cases=len(results),
-        triggered=sum(1 for result in results if result.fault_triggered),
+        triggered=len(triggered),
         category_accuracy=_rate(scored, "category_correct"),
         culprit_accuracy=_rate(scored, "culprit_correct"),
         fix_validity=_rate(scored, "fix_valid"),
         distractor_category_accuracy=_rate(distractors, "category_correct"),
+        jev_proceed_rate=round(len(proceeded) / len(triggered), 4) if triggered else 0.0,
+        jev_proceed_precision=_rate(proceeded, "trusted_correctly"),
+        jev_catch_rate=round(sum(1 for r in wrong if r.jev_decision is not JevDecision.PROCEED) / len(wrong), 4)
+        if wrong
+        else None,
         mean_latency_seconds=round(statistics.fmean(latencies), 3),
         p95_latency_seconds=round(latencies[min(len(latencies) - 1, int(0.95 * len(latencies)))], 3),
         total_cost_usd=round(sum(result.cost_usd for result in scored), 4),
@@ -102,6 +120,9 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         f"| Culprit accuracy | {summary.culprit_accuracy:.1%} |",
         f"| Fix validity (rebuild passes / correct escalation) | {summary.fix_validity:.1%} |",
         f"| Category accuracy on cases with distractor commits | {summary.distractor_category_accuracy:.1%} |",
+        f"| JEV proceed rate (fix sent to a human as trusted) | {summary.jev_proceed_rate:.1%} |",
+        f"| JEV proceed precision (trusted and actually right) | {summary.jev_proceed_precision:.1%} |",
+        f"| JEV catch rate (wrong diagnoses held back) | {_catch_rate(summary.jev_catch_rate)} |",
         f"| Mean / p95 latency | {summary.mean_latency_seconds:.2f}s / {summary.p95_latency_seconds:.2f}s |",
         f"| Total LLM cost | ${summary.total_cost_usd:.4f} |",
         f"| Mean diagnostic queries per incident | {summary.mean_queries} |",
@@ -117,8 +138,8 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         "",
         "## Cases",
         "",
-        "| Case | Expected | Predicted | Culprit | Fix | Latency |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Case | Expected | Predicted | Culprit | Fix | JEV | Latency |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
         *[_case_row(result) for result in results],
         "",
     ]
@@ -149,15 +170,19 @@ def render_step_latency(spans_file: Path) -> str:
 
 def _case_row(result: CaseResult) -> str:
     if not result.fault_triggered:
-        return f"| {result.case_id} | {result.expected_category} | fault did not trigger | | | |"
+        return f"| {result.case_id} | {result.expected_category} | fault did not trigger | | | | |"
     mark = "✅" if result.category_correct else "❌"
     culprit_mark = "✅" if result.culprit_correct else "❌"
     fix_mark = "✅" if result.fix_valid else "❌"
     return (
         f"| {result.case_id} | {result.expected_category} | {mark} {result.predicted_category} "
         f"({result.confidence}) | {culprit_mark} {result.predicted_culprit} | {fix_mark} {result.fix_kind} | "
-        f"{result.latency_seconds:.2f}s |"
+        f"{result.jev_decision or ''} | {result.latency_seconds:.2f}s |"
     )
+
+
+def _catch_rate(rate: float | None) -> str:
+    return "n/a (no wrong diagnoses)" if rate is None else f"{rate:.1%}"
 
 
 def _rate(results: list[CaseResult], field: str) -> float:
