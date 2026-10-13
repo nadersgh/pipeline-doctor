@@ -45,7 +45,7 @@ uv run pipeline-doctor demo faults                        # list the injectable 
 uv run pipeline-doctor demo break renamed_orders_status   # inject a fault and run the DAG's tasks
 uv run pipeline-doctor diagnose                           # diagnose the failure, print the report
 uv run pipeline-doctor approve <incident-id> --approver you
-uv run pipeline-doctor eval --workers 6                   # 36-case eval, writes evals/results/<run>/
+uv run pipeline-doctor eval --workers 6                   # 36-case dev eval, writes evals/results/<run>/
 ```
 
 Use an LLM reasoner with `PIPELINE_DOCTOR_REASONER=anthropic` or `openai`, plus the provider's API key. If the provider fails, the reasoner falls back to the heuristic reasoner one step at a time, so an outage degrades the diagnosis instead of failing it.
@@ -120,7 +120,7 @@ A compound case accepts either fault as the root cause. **Primary hit** means ca
 Run ids and workspace paths are random, so nothing in the agent's context names the fault. A fault that fails to break the pipeline counts as a miss.
 
 ```bash
-uv run pipeline-doctor eval --split holdout          # dev | holdout | all (default)
+uv run pipeline-doctor eval --split holdout          # dev (default, the regression set) | holdout | all
 uv run pipeline-doctor eval --repeats 3 --workers 6  # each run in a fresh workspace
 ```
 
@@ -193,6 +193,5 @@ uv run ruff check src tests && uv run ruff format --check src tests
 
 - Run the eval with Claude and GPT reasoners, and publish accuracy against cost and latency.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
-- Held-out faults the heuristic was not tuned on: multi-fault incidents, silent filter regressions, late-arriving dimensions.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.

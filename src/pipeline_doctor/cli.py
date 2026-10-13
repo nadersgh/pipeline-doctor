@@ -138,8 +138,8 @@ def run_eval(
     reasoner: Annotated[ReasonerKind | None, typer.Option(help="Override the configured reasoner.")] = None,
     cases: Annotated[str, typer.Option(help="Comma-separated case ids; empty runs the whole split.")] = "",
     split: Annotated[
-        SplitFilter, typer.Option(help="dev: cases the heuristic was written against; holdout: untuned.")
-    ] = SplitFilter.ALL,
+        SplitFilter, typer.Option(help="dev: regression set the heuristic was written against; holdout: untuned.")
+    ] = SplitFilter.DEV,
     repeats: Annotated[int, typer.Option(min=1, help="Runs per case, each in a fresh workspace.")] = 1,
     workers: Annotated[int, typer.Option(min=1)] = 4,
     work_dir: Annotated[Path, typer.Option()] = Path(".pipeline_doctor/eval_workspaces"),
