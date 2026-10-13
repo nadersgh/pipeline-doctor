@@ -1,4 +1,6 @@
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -10,7 +12,7 @@ from pipeline_doctor.incidents.repository import IncidentRepository
 from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
-from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError
+from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError, PullRequest
 from pipeline_doctor.vcs.repository import GitRepository
 from tests.conftest import RecordingPublisher
 
@@ -219,3 +221,43 @@ def test_github_publisher_wraps_api_failures(pending_incident: Incident) -> None
     # Act / Assert
     with pytest.raises(PublishError, match="github GET"):
         publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+
+def test_concurrent_approvals_open_only_one_pull_request(
+    project: Path, repository: IncidentRepository, pending_incident: Incident, tmp_path: Path
+) -> None:
+    # Setup
+    class SlowPublisher:
+        def __init__(self) -> None:
+            self.opened = 0
+
+        def open_draft(self, incident: Incident, files: dict[str, str]) -> PullRequest:
+            self.opened += 1
+            time.sleep(0.05)
+            return PullRequest(url="https://example.test/pr/1", branch="b", title="t")
+
+    publisher = SlowPublisher()
+    repository.save(pending_incident)
+    service = ApprovalService(repository, publisher, IncidentMemory(tmp_path / "m.jsonl"), project)
+
+    def approve() -> str:
+        try:
+            return service.approve(pending_incident.id, "nader").status
+        except IncidentApprovalError:
+            return "conflict"
+
+    # Act
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outcomes = list(pool.map(lambda _: approve(), range(4)))
+
+    # Assert
+    assert publisher.opened == 1
+    assert outcomes.count("conflict") == 3
+
+
+def test_incident_save_leaves_no_temporary_file(repository: IncidentRepository, pending_incident: Incident) -> None:
+    # Act
+    repository.save(pending_incident)
+
+    # Assert
+    assert [path.suffix for path in (repository._directory).iterdir()] == [".json"]
