@@ -27,7 +27,7 @@ Airflow on_failure_callback ──► POST /webhooks/airflow ──► incident
 4. **Assess.** It either concludes or loops back for more evidence, up to `max_investigation_rounds`.
 5. **Explain.** It writes a technical summary for engineers and a plain-language one for stakeholders ("why is my dashboard wrong?") that names the impacted dashboards.
 6. **Propose a fix.** Options are a model change, a schema patch, a test change, or an operational escalation when the data owner has to act. Edits are exact-snippet patches, validated before anything is shown. A patch that does not apply is sent back to the reasoner once with the error. Reverts undo only the suspect commit's hunks, so later edits to the same file survive. If the investigation runs out of rounds without a confident conclusion, no code change is proposed.
-7. **JEV review.** A Judge / Evaluator / Verifier layer decides what happens to the proposal. See [JEV decision layer](#jev-decision-layer).
+7. **JEV review (optional).** A Judge / Evaluator / Verifier layer decides what happens to the proposal. See [JEV decision layer](#jev-decision-layer).
 8. **Wait for approval.** On approval, the fix is committed to `pipeline-doctor/<incident-id>` and opened as a draft PR. The resolution is stored in memory so recurring failures are recognised.
 
 ### Root-cause taxonomy (10 categories)
@@ -75,7 +75,9 @@ Each check is weighted; the verdict carries a score and the failed checks. The d
 | `revise_fix` | an Evaluate or Verify check fails and `jev_max_fix_revisions` remain | `propose_fix`, with the failed checks as feedback |
 | `escalate` | budget exhausted | code fix replaced by an operational handoff to the on-call engineer |
 
-The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=true` with an LLM reasoner to add an LLM-as-judge behind it. The judge runs only after the rules pass, can veto but never overturn a rule failure, and falls back to the rule verdict if the model call fails. `ApprovalService` refuses to open a PR for any code fix whose verdict is not `proceed`. The verdict appears in the incident report, the Slack message, the `agent.jev` span, and the eval table (proceed rate, proceed precision, catch rate).
+JEV is on by default. Turn it off with `PIPELINE_DOCTOR_JEV_ENABLED=false`, or per run with `--no-jev` on `diagnose` and `eval`. When off, `propose_fix` goes straight to `request_approval`, incidents carry no verdict, and the human reviewer is the only gate. Eval runs without JEV are saved as `<run>_nojev` so you can compare both.
+
+The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=true` with an LLM reasoner to add an LLM-as-judge behind it. The judge runs only after the rules pass, can veto but never overturn a rule failure, and falls back to the rule verdict if the model call fails. When JEV is on, `ApprovalService` refuses to open a PR for any code fix whose verdict is not `proceed`. The verdict appears in the incident report, the Slack message, the `agent.jev` span, and the eval table (proceed rate, proceed precision, catch rate).
 
 ## Evals
 
@@ -106,7 +108,7 @@ Read the heuristic row as a regression baseline, not a headline. The rules were 
 | Arbitrary SQL | [`SqlGuard`](src/pipeline_doctor/warehouse/guard.py) parses with sqlglot. It allows exactly one `SELECT`/set-operation and rejects DML, DDL, `COPY`, `ATTACH`, `PRAGMA`, `SELECT INTO`, table functions, file and network functions (`read_*`, `glob`, ...), Snowflake stages (`@stage`), sequences (`.nextval`), user-defined functions, and unknown functions outside a small allowlist. Tables must be schema-qualified, in `allowed_schemas`, and in the configured database. Every query is wrapped in `LIMIT max_result_rows`. The guard is defence in depth; the read-only credentials are the primary control. |
 | Cost / runaway loops | Per-incident `QueryBudget` (query count, per-query timeout, and on Snowflake the bytes scanned estimated through `EXPLAIN`; DuckDB has no scan estimate), a bounded number of investigation rounds, and LLM tokens and cost metered per run. |
 | Unsafe patches | Edits are limited to `.sql`/`.yml`/`.md`/`.csv` under `models/`, `tests/`, `macros/`, `snapshots/`, `seeds/`, `analyses/`. Absolute paths, `..`, and symlinks anywhere on the path are rejected. The `original` snippet must occur exactly once. Files owned by installed dbt packages are left out of the editable context. |
-| Untrusted proposals | JEV gates every proposal before a human sees it, and approval refuses code fixes JEV did not clear. |
+| Untrusted proposals | When enabled, JEV gates every proposal before a human sees it, and approval refuses code fixes JEV did not clear. |
 | Unreviewed writes | The agent has no write tools. Only `ApprovalService.approve` can publish, it requires an incident in `awaiting_approval` and an authenticated reviewer, and it opens a **draft** PR. Approval endpoints fail closed until reviewer tokens are configured, and the webhook service token cannot approve. The local publisher commits with git plumbing, so the working tree and index are never touched. |
 | Webhook/Slack spoofing | Bearer token on the API. Slack requests need a valid HMAC signature with a 5-minute replay window, and only users in `PIPELINE_DOCTOR_SLACK_APPROVERS` can approve. |
 | Shell injection | git and dbt run with fixed argument vectors and no shell. Refs and paths are validated. |
@@ -141,7 +143,7 @@ tests/              unit tests + integration tests that run real dbt against Duc
 ## Development
 
 ```bash
-uv run pytest                 # 137 tests, ~45s (integration tests build real dbt workspaces)
+uv run pytest                 # 139 tests, ~45s (integration tests build real dbt workspaces)
 uv run pytest -m "not integration"
 uv run ruff check src tests && uv run ruff format --check src tests
 ```

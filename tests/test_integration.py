@@ -157,3 +157,23 @@ def test_unconfident_diagnosis_never_yields_a_code_change(
     assert incident.fix.title.startswith("Low-confidence")
     assert incident.verdict is not None
     assert incident.verdict.decision is JevDecision.ESCALATE
+
+
+def test_disabled_jev_skips_review_and_still_proposes_a_fix(
+    demo_workspace: DemoWorkspace, demo_settings: Settings
+) -> None:
+    # Setup
+    case, failure = _break(demo_workspace, "renamed_orders_status")
+    settings = demo_settings.model_copy(update={"jev_enabled": False})
+    agent = build_agent(settings, IncidentMemory(demo_workspace.root / "memory.jsonl"))
+
+    # Act
+    incident = agent.diagnose(failure)
+
+    # Assert
+    assert incident.status is IncidentStatus.AWAITING_APPROVAL
+    assert incident.diagnosis is not None
+    assert incident.diagnosis.category is case.category
+    assert incident.verdict is None
+    assert incident.fix is not None
+    assert incident.fix.kind is not FixKind.OPERATIONAL

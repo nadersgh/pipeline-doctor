@@ -56,6 +56,7 @@ class EvalSummary(BaseModel):
     culprit_accuracy: float
     fix_validity: float
     distractor_category_accuracy: float
+    jev_enabled: bool = True
     jev_proceed_rate: float = 0.0
     jev_proceed_precision: float = 0.0
     jev_catch_rate: float | None = Field(default=None, description="None when no diagnosis was wrong.")
@@ -66,7 +67,9 @@ class EvalSummary(BaseModel):
     by_category: list[CategoryRow]
 
 
-def summarize(reasoner: str, started_at: datetime, results: list[CaseResult]) -> EvalSummary:
+def summarize(
+    reasoner: str, started_at: datetime, results: list[CaseResult], *, jev_enabled: bool = True
+) -> EvalSummary:
     # Rates use every case: a fault that fails to break the pipeline counts against the run, never silently drops out.
     scored = results
     grouped: dict[RootCauseCategory, list[CaseResult]] = defaultdict(list)
@@ -82,6 +85,7 @@ def summarize(reasoner: str, started_at: datetime, results: list[CaseResult]) ->
         started_at=started_at,
         cases=len(results),
         triggered=len(triggered),
+        jev_enabled=jev_enabled,
         category_accuracy=_rate(scored, "category_correct"),
         culprit_accuracy=_rate(scored, "culprit_correct"),
         fix_validity=_rate(scored, "fix_valid"),
@@ -120,9 +124,7 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         f"| Culprit accuracy | {summary.culprit_accuracy:.1%} |",
         f"| Fix validity (rebuild passes / correct escalation) | {summary.fix_validity:.1%} |",
         f"| Category accuracy on cases with distractor commits | {summary.distractor_category_accuracy:.1%} |",
-        f"| JEV proceed rate (fix sent to a human as trusted) | {summary.jev_proceed_rate:.1%} |",
-        f"| JEV proceed precision (trusted and actually right) | {summary.jev_proceed_precision:.1%} |",
-        f"| JEV catch rate (wrong diagnoses held back) | {_catch_rate(summary.jev_catch_rate)} |",
+        *_jev_rows(summary),
         f"| Mean / p95 latency | {summary.mean_latency_seconds:.2f}s / {summary.p95_latency_seconds:.2f}s |",
         f"| Total LLM cost | ${summary.total_cost_usd:.4f} |",
         f"| Mean diagnostic queries per incident | {summary.mean_queries} |",
@@ -179,6 +181,16 @@ def _case_row(result: CaseResult) -> str:
         f"({result.confidence}) | {culprit_mark} {result.predicted_culprit} | {fix_mark} {result.fix_kind} | "
         f"{result.jev_decision or ''} | {result.latency_seconds:.2f}s |"
     )
+
+
+def _jev_rows(summary: EvalSummary) -> list[str]:
+    if not summary.jev_enabled:
+        return ["| JEV decision layer | disabled |"]
+    return [
+        f"| JEV proceed rate (fix sent to a human as trusted) | {summary.jev_proceed_rate:.1%} |",
+        f"| JEV proceed precision (trusted and actually right) | {summary.jev_proceed_precision:.1%} |",
+        f"| JEV catch rate (wrong diagnoses held back) | {_catch_rate(summary.jev_catch_rate)} |",
+    ]
 
 
 def _catch_rate(rate: float | None) -> str:

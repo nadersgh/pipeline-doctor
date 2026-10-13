@@ -6,7 +6,7 @@ import pytest
 from pipeline_doctor.agent.context import IncidentContext
 from pipeline_doctor.agent.reasoning.base import Investigation, ReasonerError
 from pipeline_doctor.diagnostics.checks import CheckKind, CheckRequest, CheckResult
-from pipeline_doctor.evals.report import CaseResult, summarize
+from pipeline_doctor.evals.report import CaseResult, render_markdown, summarize
 from pipeline_doctor.incidents.models import (
     Culprit,
     Diagnosis,
@@ -305,3 +305,16 @@ def test_eval_summary_has_no_catch_rate_without_wrong_diagnoses() -> None:
 
     # Assert
     assert summary.jev_catch_rate is None
+
+
+def test_eval_report_marks_jev_disabled() -> None:
+    # Setup
+    result = _case("ok", correct=True, decision=JevDecision.PROCEED).model_copy(update={"jev_decision": None})
+    summary = summarize("heuristic", datetime.now(UTC), [result], jev_enabled=False)
+
+    # Act
+    markdown = render_markdown(summary, [result])
+
+    # Assert
+    assert "| JEV decision layer | disabled |" in markdown
+    assert "JEV proceed rate" not in markdown

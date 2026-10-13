@@ -73,9 +73,10 @@ def diagnose(
     event_file: Annotated[Path, typer.Option("--event", help="FailureEvent JSON.")] = Path("demo_workspace")
     / _LAST_FAILURE_FILE,
     reasoner: Annotated[ReasonerKind | None, typer.Option(help="Override the configured reasoner.")] = None,
+    jev: Annotated[bool | None, typer.Option("--jev/--no-jev", help="Override PIPELINE_DOCTOR_JEV_ENABLED.")] = None,
 ) -> None:
     """Diagnose a failure event and store the incident for review."""
-    settings = _settings(reasoner)
+    settings = _settings(reasoner, jev)
     event = FailureEvent.model_validate_json(event_file.read_text())
     service = DoctorService(settings)
     incident = service.diagnose(service.open_incident(event).id)
@@ -130,11 +131,12 @@ def run_eval(
     workers: Annotated[int, typer.Option(min=1)] = 4,
     work_dir: Annotated[Path, typer.Option()] = Path(".pipeline_doctor/eval_workspaces"),
     output_dir: Annotated[Path, typer.Option()] = Path("evals/results"),
+    jev: Annotated[bool | None, typer.Option("--jev/--no-jev", help="Override PIPELINE_DOCTOR_JEV_ENABLED.")] = None,
 ) -> None:
     """Inject every fault into an isolated workspace, diagnose it, and score the agent."""
     wanted = {item.strip() for item in cases.split(",") if item.strip()}
     selected = [case for case in list_eval_cases() if not wanted or case.case_id in wanted]
-    run = EvalHarness(_settings(reasoner), work_dir).run(selected, output_dir, workers)
+    run = EvalHarness(_settings(reasoner, jev), work_dir).run(selected, output_dir, workers)
     summary = (run.output_dir / "summary.md").read_text().split("## Cases")[0]
     console.print(Markdown(summary))
     console.print(f"Per-case results: {run.output_dir / 'summary.md'}")
@@ -164,6 +166,10 @@ def main() -> None:
         raise SystemExit(1) from error
 
 
-def _settings(reasoner: ReasonerKind | None) -> Settings:
-    settings = Settings()
-    return settings.model_copy(update={"reasoner": reasoner}) if reasoner else settings
+def _settings(reasoner: ReasonerKind | None, jev: bool | None = None) -> Settings:
+    overrides: dict[str, object] = {}
+    if reasoner:
+        overrides["reasoner"] = reasoner
+    if jev is not None:
+        overrides["jev_enabled"] = jev
+    return Settings().model_copy(update=overrides)

@@ -34,13 +34,14 @@ class EvalHarness:
 
     def run(self, cases: list[EvalCase], output_dir: Path, workers: int = 4) -> EvalRun:
         started_at = datetime.now(UTC)
-        run_dir = output_dir / f"{started_at:%Y%m%dT%H%M%S}_{self._settings.reasoner}"
+        suffix = "" if self._settings.jev_enabled else "_nojev"
+        run_dir = output_dir / f"{started_at:%Y%m%dT%H%M%S}_{self._settings.reasoner}{suffix}"
         run_dir.mkdir(parents=True, exist_ok=True)
         configure_tracing(run_dir / "spans.jsonl")
         template = create_workspace(self._work_dir / "_template")
         with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(lambda case: self._run_case(template, case), cases))
-        summary = summarize(self._settings.reasoner, started_at, results)
+        summary = summarize(self._settings.reasoner, started_at, results, jev_enabled=self._settings.jev_enabled)
         logger.info(f"write eval results {run_dir}")
         (run_dir / "results.jsonl").write_text("".join(result.model_dump_json() + "\n" for result in results))
         (run_dir / "summary.json").write_text(summary.model_dump_json(indent=2))

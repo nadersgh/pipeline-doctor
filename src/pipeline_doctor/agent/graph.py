@@ -90,7 +90,7 @@ class PipelineDoctor:
         toolkit: DiagnosticToolkit,
         reasoner: Reasoner,
         meter: UsageMeter,
-        jev: JevReviewer,
+        jev: JevReviewer | None = None,
         max_rounds: int = 2,
         max_fix_revisions: int = 1,
     ) -> None:
@@ -142,7 +142,8 @@ class PipelineDoctor:
         graph.add_node("assess", self._assess)
         graph.add_node("explain", self._explain)
         graph.add_node("propose_fix", self._propose_fix)
-        graph.add_node("jev", self._review)
+        if self._jev is not None:
+            graph.add_node("jev", self._review)
         graph.add_node("request_approval", self._request_approval)
         graph.add_edge(START, "detect")
         graph.add_edge("detect", "gather_context")
@@ -151,8 +152,13 @@ class PipelineDoctor:
         graph.add_edge("verify", "assess")
         graph.add_conditional_edges("assess", self._route_after_assessment, ["hypothesize", "explain"])
         graph.add_edge("explain", "propose_fix")
-        graph.add_edge("propose_fix", "jev")
-        graph.add_conditional_edges("jev", self._route_after_review, ["request_approval", "propose_fix", "hypothesize"])
+        if self._jev is None:
+            graph.add_edge("propose_fix", "request_approval")
+        else:
+            graph.add_edge("propose_fix", "jev")
+            graph.add_conditional_edges(
+                "jev", self._route_after_review, ["request_approval", "propose_fix", "hypothesize"]
+            )
         graph.add_edge("request_approval", END)
         return graph.compile()
 
@@ -242,8 +248,8 @@ class PipelineDoctor:
 
     def _review(self, state: AgentState) -> dict[str, object]:
         with traced("agent.jev", {"reviewer": self._jev.name}) as span:
-            if state.fix is None:
-                raise RuntimeError("a fix must be proposed before JEV review")
+            if state.fix is None or self._jev is None:
+                raise RuntimeError("JEV review needs a reviewer and a proposed fix")
             request = JevRequest(
                 investigation=state.investigation(),
                 fix=state.fix,
