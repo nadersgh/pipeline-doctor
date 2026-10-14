@@ -89,6 +89,7 @@ def _metrics(incident: Incident) -> dict[str, object]:
         "latency_seconds": metrics.latency_seconds,
         "cost_usd": metrics.cost_usd,
         "llm_calls": metrics.llm_calls,
+        "llm_fallbacks": metrics.llm_fallbacks,
         "queries_run": metrics.queries_run,
         "queries_blocked": metrics.queries_blocked,
         "injection_findings": len(incident.injection_findings),

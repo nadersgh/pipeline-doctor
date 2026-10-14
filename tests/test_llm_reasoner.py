@@ -117,6 +117,20 @@ def test_fallback_reasoner_uses_fallback_when_primary_fails(investigation: Inves
     assert hypotheses[0].rationale == "fallback"
 
 
+def test_fallback_reasoner_counts_each_fallback_in_the_run_metrics(
+    investigation: Investigation, meter: UsageMeter
+) -> None:
+    # Setup
+    reasoner = FallbackReasoner(FailingReasoner(), StaticReasoner(), meter)
+
+    # Act
+    reasoner.hypothesize(investigation)
+    reasoner.hypothesize(investigation)
+
+    # Assert
+    assert meter.fill(RunMetrics()).llm_fallbacks == 2
+
+
 def _anthropic_response(payload: dict[str, Any] | str) -> SimpleNamespace:
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=payload if isinstance(payload, str) else json.dumps(payload))],
