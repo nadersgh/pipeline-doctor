@@ -69,8 +69,9 @@ class ApprovalService:
                     "pull_request_url": pull_request.url,
                 }
             )
-        self._remember(resolved)
-        return self._repository.save(resolved)
+        saved = self._repository.save(resolved)
+        self._remember(saved)
+        return saved
 
     def _get_pending(self, incident_id: str) -> Incident:
         incident = self._repository.get(incident_id)
@@ -82,12 +83,14 @@ class ApprovalService:
         if incident.diagnosis is None:
             return
         fix_title = incident.fix.title if incident.fix else "no fix"
-        self._memory.remember(
-            PastIncident(
-                incident_id=incident.id,
-                signature=incident.signature,
-                category=incident.diagnosis.category,
-                culprit=incident.diagnosis.culprit.describe(),
-                resolution=f"{fix_title} (approved by {incident.approved_by})",
-            )
+        past = PastIncident(
+            incident_id=incident.id,
+            signature=incident.signature,
+            category=incident.diagnosis.category,
+            culprit=incident.diagnosis.culprit.describe(),
+            resolution=f"{fix_title} (approved by {incident.approved_by})",
         )
+        try:
+            self._memory.remember(past)
+        except (OSError, ValueError):
+            logger.exception(f"incident {incident.id} approved but not added to memory")
