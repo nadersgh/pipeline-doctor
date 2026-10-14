@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from pipeline_doctor.incidents.models import Incident, IncidentStatus
 from pipeline_doctor.incidents.repository import IncidentRepository
 from pipeline_doctor.jev.models import JevDecision, JevVerdict
-from pipeline_doctor.memory.store import IncidentMemory
+from pipeline_doctor.memory.store import IncidentMemory, PastIncident
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
 from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError, PullRequest
 from pipeline_doctor.settings import PublisherKind, Settings
@@ -70,6 +70,32 @@ def test_approval_opens_draft_pr_and_records_memory(
     assert approved.pull_request_url == "https://example.test/pr/1"
     assert "rename (order_status as status)" in publisher.opened[0]["models/staging/stg_orders.sql"]
     assert memory.search(pending_incident.signature)[0].incident.incident_id == pending_incident.id
+
+
+def test_approval_survives_a_memory_failure_without_reopening_the_pull_request(
+    project: Path,
+    repository: IncidentRepository,
+    pending_incident: Incident,
+    tmp_path: Path,
+    recording_publisher: RecordingPublisher,
+) -> None:
+    # Setup
+    class BrokenMemory(IncidentMemory):
+        def remember(self, incident: PastIncident) -> None:
+            raise OSError("disk full")
+
+    repository.save(pending_incident)
+    service = ApprovalService(repository, recording_publisher, BrokenMemory(tmp_path / "m.jsonl"), project)
+
+    # Act
+    approved = service.approve(pending_incident.id, "nader")
+
+    # Assert
+    assert approved.status is IncidentStatus.PR_OPENED
+    assert repository.get(pending_incident.id).status is IncidentStatus.PR_OPENED
+    with pytest.raises(IncidentApprovalError):
+        service.approve(pending_incident.id, "nader")
+    assert len(recording_publisher.opened) == 1
 
 
 def test_approval_refuses_incidents_not_awaiting_review(
