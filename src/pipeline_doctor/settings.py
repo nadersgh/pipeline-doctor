@@ -52,8 +52,8 @@ class Settings(BaseSettings):
 
     reasoner: ReasonerKind = ReasonerKind.HEURISTIC
     llm_model: str = ""
-    llm_input_cost_per_mtok: float = 3.0
-    llm_output_cost_per_mtok: float = 15.0
+    llm_input_cost_per_mtok: float = 2.0
+    llm_output_cost_per_mtok: float = 10.0
     max_investigation_rounds: int = 2
 
     jev_enabled: bool = Field(default=True, description="Gate fix proposals with the JEV decision layer.")
