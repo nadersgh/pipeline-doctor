@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from pipeline_doctor.evals import harness
 from pipeline_doctor.evals.cases import EvalCase, EvalCaseKind, EvalSplit, list_eval_cases
 from pipeline_doctor.evals.catalogue import EvalCaseNotFoundError, SplitFilter, list_all_cases, select_cases
 from pipeline_doctor.evals.compound import list_compound_cases
-from pipeline_doctor.evals.harness import EvalReasonerFallbackError, check_no_fallbacks
+from pipeline_doctor.evals.harness import EvalHarness, EvalPlan, EvalReasonerFallbackError, check_no_fallbacks
 from pipeline_doctor.evals.holdout import list_holdout_cases
 from pipeline_doctor.evals.nofault import list_no_fault_cases
 from pipeline_doctor.evals.report import (
@@ -29,7 +30,7 @@ from pipeline_doctor.incidents.models import (
     Incident,
     RootCauseCategory,
 )
-from pipeline_doctor.settings import ReasonerKind
+from pipeline_doctor.settings import ReasonerKind, Settings
 
 _MIN_CONFIDENCE = 0.6
 
@@ -359,3 +360,24 @@ def test_llm_eval_passes_without_fallbacks_and_heuristic_eval_never_checks(tmp_p
     # Act / Assert
     check_no_fallbacks(ReasonerKind.ANTHROPIC, [_result("a")], tmp_path)
     check_no_fallbacks(ReasonerKind.HEURISTIC, [_result("a", llm_fallbacks=3)], tmp_path)
+
+
+def test_concurrent_eval_runs_never_share_a_template_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Setup
+    roots: list[Path] = []
+
+    def record_root(root: Path) -> None:
+        roots.append(root)
+        raise RuntimeError("stop after recording the template location")
+
+    monkeypatch.setattr(harness, "create_workspace", record_root)
+    plan = EvalPlan(cases=[], repeats=1, split=SplitFilter.ALL)
+
+    # Act
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="stop after recording"):
+            EvalHarness(Settings(), tmp_path / "work").run(plan, tmp_path / "results")
+
+    # Assert
+    assert roots[0] != roots[1]
+    assert all(root.is_relative_to(tmp_path / "work") for root in roots)

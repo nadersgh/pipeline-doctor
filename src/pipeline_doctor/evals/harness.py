@@ -43,7 +43,7 @@ class EvalHarness:
 
     def __init__(self, settings: Settings, work_dir: Path) -> None:
         self._settings = settings
-        self._work_dir = work_dir
+        self._work_dir = work_dir / f"run_{datetime.now(UTC):%Y%m%dT%H%M%S}_{uuid.uuid4().hex[:6]}"
         self._scorer = IncidentScorer(settings.jev_min_confidence)
 
     def run(self, plan: EvalPlan, output_dir: Path, workers: int = 4) -> EvalRun:
