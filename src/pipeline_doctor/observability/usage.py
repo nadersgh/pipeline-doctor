@@ -13,6 +13,7 @@ class UsageMeter:
         self._output_cost_per_mtok = output_cost_per_mtok
         self._lock = threading.Lock()
         self._llm_calls = 0
+        self._llm_fallbacks = 0
         self._input_tokens = 0
         self._output_tokens = 0
 
@@ -26,6 +27,10 @@ class UsageMeter:
         span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
         span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
 
+    def record_fallback(self) -> None:
+        with self._lock:
+            self._llm_fallbacks += 1
+
     def fill(self, metrics: RunMetrics) -> RunMetrics:
         cost = (
             self._input_tokens * self._input_cost_per_mtok + self._output_tokens * self._output_cost_per_mtok
@@ -33,6 +38,7 @@ class UsageMeter:
         return metrics.model_copy(
             update={
                 "llm_calls": self._llm_calls,
+                "llm_fallbacks": self._llm_fallbacks,
                 "input_tokens": self._input_tokens,
                 "output_tokens": self._output_tokens,
                 "cost_usd": round(cost, 6),

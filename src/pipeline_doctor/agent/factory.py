@@ -78,7 +78,7 @@ def build_reasoner(settings: Settings, meter: UsageMeter, dialect: str) -> Reaso
     if settings.reasoner is ReasonerKind.HEURISTIC:
         return heuristic
     model = settings.llm_model or _DEFAULT_MODELS[settings.reasoner]
-    return FallbackReasoner(LLMReasoner(_build_llm_client(settings, meter), model, dialect), heuristic)
+    return FallbackReasoner(LLMReasoner(_build_llm_client(settings, meter), model, dialect), heuristic, meter)
 
 
 def build_jev(settings: Settings, meter: UsageMeter, project_dir: Path) -> JevReviewer | None:

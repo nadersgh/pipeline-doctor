@@ -14,7 +14,7 @@ from pipeline_doctor.agent.fixes import FixApplicationError
 from pipeline_doctor.demo.workspace import DemoWorkspace, create_workspace
 from pipeline_doctor.evals.catalogue import EvalCaseNotFoundError, SplitFilter, get_case, list_all_cases, select_cases
 from pipeline_doctor.evals.gate import EvalGateError, load_gate
-from pipeline_doctor.evals.harness import EvalHarness, EvalPlan
+from pipeline_doctor.evals.harness import EvalHarness, EvalPlan, EvalReasonerFallbackError
 from pipeline_doctor.evals.infra import run_case_pipeline
 from pipeline_doctor.evals.injection import inject_fault
 from pipeline_doctor.incidents.models import FailureEvent
@@ -156,7 +156,11 @@ def run_eval(
     eval_gate = load_gate(gate) if gate else None
     wanted = {item.strip() for item in cases.split(",") if item.strip()}
     plan = EvalPlan(cases=select_cases(split, wanted), repeats=repeats, split=split)
-    run = EvalHarness(_settings(reasoner, jev), work_dir).run(plan, output_dir, workers)
+    try:
+        run = EvalHarness(_settings(reasoner, jev), work_dir).run(plan, output_dir, workers)
+    except EvalReasonerFallbackError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
     summary = (run.output_dir / "summary.md").read_text().split("## Cases")[0]
     console.print(Markdown(summary))
     console.print(f"Per-case results: {run.output_dir / 'summary.md'}")

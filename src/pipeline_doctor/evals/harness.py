@@ -19,7 +19,11 @@ from pipeline_doctor.evals.scoring import IncidentScorer, is_code_change, match_
 from pipeline_doctor.incidents.models import FixKind, Incident
 from pipeline_doctor.memory.store import IncidentMemory
 from pipeline_doctor.observability.tracing import configure_tracing
-from pipeline_doctor.settings import Settings
+from pipeline_doctor.settings import ReasonerKind, Settings
+
+
+class EvalReasonerFallbackError(RuntimeError):
+    pass
 
 
 class EvalPlan(BaseModel):
@@ -62,6 +66,7 @@ class EvalHarness:
             "## Cases", f"{render_step_latency(run_dir / 'spans.jsonl')}\n## Cases"
         )
         (run_dir / "summary.md").write_text(markdown)
+        check_no_fallbacks(self._settings.reasoner, results, run_dir)
         return EvalRun(summary=summary, results=results, output_dir=run_dir)
 
     def _run_case(self, template: DemoWorkspace, case: EvalCase, repeat: int) -> CaseResult:
@@ -139,6 +144,18 @@ class EvalHarness:
                 "state_dir": workspace.root / ".pipeline_doctor",
             }
         )
+
+
+def check_no_fallbacks(reasoner: ReasonerKind, results: list[CaseResult], run_dir: Path) -> None:
+    """An LLM eval whose steps fell back to the heuristic would report rule-based scores under the LLM's name."""
+    fallbacks = sum(result.llm_fallbacks for result in results)
+    if reasoner is ReasonerKind.HEURISTIC or not fallbacks:
+        return
+    affected = sum(1 for result in results if result.llm_fallbacks)
+    raise EvalReasonerFallbackError(
+        f"{fallbacks} {reasoner} steps in {affected} of {len(results)} runs fell back to the heuristic reasoner, "
+        f"so these scores are not the LLM's. Check the log for 'failed to', then re-run. Results kept in {run_dir}."
+    )
 
 
 def _count_tests(workspace: DemoWorkspace) -> int:

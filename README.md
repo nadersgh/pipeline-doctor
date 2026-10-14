@@ -4,37 +4,53 @@ Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs.
 
 ## Results
 
-39 injected faults across 10 root-cause categories (the `dev` split, 3 of them carrying prompt-injection payloads). Each case breaks a real dbt project on DuckDB, runs the agent on the Airflow failure, then applies its fix and rebuilds. Heuristic run from 2026-10-13, JEV on.
+51 injected faults, each breaking a real dbt project on DuckDB: the `dev` split (39 cases across 10 root-cause categories, 3 carrying prompt-injection payloads), which the heuristic reasoner was written against, and an untuned `holdout` split (12 cases: unseen faults, 3 compound faults, 2 infrastructure failures with no code fault). The agent runs on the Airflow failure, then its fix is applied and the project rebuilt. Run on 2026-10-14, JEV on, one run per case, Claude reasoner `claude-sonnet-5-5` (priced at $2 / $10 per million tokens).
 
-| Fault type (root-cause category) | Cases | Heuristic: category | Heuristic: culprit | Heuristic: fix valid | LLM (Claude / GPT) |
-| --- | --- | --- | --- | --- | --- |
-| `source_column_renamed` | 5 | 100% | 100% | 100% | pending |
-| `source_type_changed` | 3 | 100% | 100% | 100% | pending |
-| `source_null_spike` | 5 | 100% | 100% | 100% | pending |
-| `source_duplicate_rows` | 4 | 100% | 100% | 100% | pending |
-| `source_stale` | 4 | 100% | 100% | 100% | pending |
-| `source_new_category` | 4 | 100% | 100% | 100% | pending |
-| `source_missing_rows` | 3 | 100% | 100% | 100% | pending |
-| `code_sql_error` | 5 | 100% | 100% | 100% | pending |
-| `code_join_fanout` | 3 | 100% | 100% | 100% | pending |
-| `code_logic_regression` | 3 | 100% | 100% | 100% | pending |
-| **All** | **39** | **100%** | **100%** | **100%** | pending |
+**Dev split (39 cases).** The heuristic scores 100% because it was written alongside these cases, so read that column as a regression baseline.
 
-| Metric | Heuristic | LLM |
+| Fault type (root-cause category) | Cases | Heuristic: category / culprit / fix valid | Claude: category / culprit / fix valid |
+| --- | --- | --- | --- |
+| `source_column_renamed` | 5 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_type_changed` | 3 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_null_spike` | 5 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_duplicate_rows` | 4 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_stale` | 4 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_new_category` | 4 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `source_missing_rows` | 3 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `code_sql_error` | 5 | 100% / 100% / 100% | 100% / 100% / 100% |
+| `code_join_fanout` | 3 | 100% / 100% / 100% | 67% / 100% / 100% |
+| `code_logic_regression` | 3 | 100% / 100% / 100% | 100% / 100% / 100% |
+| **All** | **39** | **100% / 100% / 100%** | **97% / 100% / 100%** |
+
+| Metric (dev) | Heuristic | Claude |
 | --- | --- | --- |
-| Category accuracy with a misleading recent commit | 100% (10/10) | pending |
-| JEV proceed rate / precision | 100% / 100% | pending |
-| Latency per incident, mean / p95 | 0.10s / 0.19s | pending |
-| Diagnostic queries per incident, mean | 1.67 | pending |
-| LLM cost, all 39 cases | $0 | pending |
+| Category accuracy with a misleading recent commit | 100% (10/10) | 100% (10/10) |
+| JEV proceed rate / precision | 100% / 100% | 100% / 97% |
+| Latency per incident, mean / p95 | 0.14s / 0.23s | 21.4s / 51.0s |
+| Diagnostic queries per incident, mean | 1.67 | 6.0 |
+| LLM cost, 39 cases | $0 | $2.18 (123 calls, about $0.056 per incident) |
 
-A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, or when the agent correctly escalates to the data owner. The heuristic reasoner was written alongside the fault catalogue, so it covers every case by construction: read it as a regression baseline, not a headline. The LLM columns are pending until I run the same harness with an API key:
+**Holdout split (12 cases, untuned).** Too small to separate the two reasoners: one case is 8 points.
+
+| Metric (holdout) | Heuristic | Claude |
+| --- | --- | --- |
+| Category accuracy | 92% (11/12) | 92% (11/12) |
+| Culprit accuracy (relation and column) | 92% | 92% |
+| Fix validity | 83% (10/12) | 92% (11/12) |
+| False positives on no-fault cases | 0% | 0% |
+| LLM cost | $0 | $0.82 (44 calls) |
+
+Both reasoners missed `holdout_type_customers_id_prefixed` (an id column that starts arriving as a prefixed string). The heuristic guessed `source_missing_rows`; Claude answered `unknown` at 0.5 confidence and JEV escalated to a human, which is the safer failure. The heuristic's other miss was the right category with an operational fix where a code change was needed. Claude's only other miss, on dev, called a join fan-out a logic regression, but its patch was valid.
+
+A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, or when the agent correctly escalates to the data owner. The same harness runs any reasoner:
 
 ```bash
-ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --workers 6   # or OPENAI_API_KEY + --reasoner openai
+ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --split all --workers 4   # or OPENAI_API_KEY + --reasoner openai
 ```
 
-Without a working key every LLM step falls back to the heuristic, and the run reports heuristic numbers under the LLM's name. Check the log for `failed to hypothesize` or `failed to assess` before publishing.
+The OpenAI reasoner has not been run through the eval yet.
+
+Without a working key every LLM step falls back to the heuristic, and the run reports heuristic numbers under the LLM's name. Before publishing an LLM run, check that `Total LLM cost / calls` is non-zero and that the log has no `failed to hypothesize`, `failed to assess` or `failed to propose a fix` lines.
 
 ## Demo
 
@@ -259,7 +275,7 @@ uv run pre-commit run --all-files
 
 ## Roadmap
 
-- Run the eval with Claude and GPT reasoners, and publish accuracy against cost and latency.
+- Run the eval with the GPT reasoner, add repeats for variance, and grow the holdout split beyond 12 cases.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.

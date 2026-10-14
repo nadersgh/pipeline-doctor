@@ -41,6 +41,7 @@ class CaseResult(BaseModel):
     latency_seconds: float = 0.0
     cost_usd: float = 0.0
     llm_calls: int = 0
+    llm_fallbacks: int = 0
     queries_run: int = 0
     queries_blocked: int = 0
     injection_findings: int = 0
@@ -87,6 +88,7 @@ class ScoreCard(BaseModel):
     p50_latency_seconds: float
     p95_latency_seconds: float
     llm_calls: int
+    llm_fallbacks: int = 0
     queries_run: int
 
 
@@ -232,6 +234,7 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
         p50_latency_seconds=round(_percentile(latencies, 0.5), 3),
         p95_latency_seconds=round(_percentile(latencies, 0.95), 3),
         llm_calls=sum(result.llm_calls for result in results),
+        llm_fallbacks=sum(result.llm_fallbacks for result in results),
         queries_run=sum(result.queries_run for result in results),
     )
 
@@ -296,6 +299,7 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         f"| Mean / p50 / p95 latency | {summary.mean_latency_seconds:.2f}s / {overall.p50_latency_seconds:.2f}s / "
         f"{summary.p95_latency_seconds:.2f}s |",
         f"| Total LLM cost / calls | ${summary.total_cost_usd:.4f} / {overall.llm_calls} |",
+        f"| Steps that fell back to the heuristic | {overall.llm_fallbacks} |",
         f"| Mean diagnostic queries per incident | {summary.mean_queries} |",
         f"| Mean per-case agreement across repeats | {summary.mean_agreement:.1%} |",
         "",
