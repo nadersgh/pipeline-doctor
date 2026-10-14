@@ -7,11 +7,13 @@ from pydantic import BaseModel
 from pipeline_doctor.agent.factory import build_agent, build_toolkit
 from pipeline_doctor.agent.fixes import apply_edits, write_project_files
 from pipeline_doctor.agent.graph import PipelineDoctor
+from pipeline_doctor.agent.reasoning.base import Investigation, ReasonerError
+from pipeline_doctor.agent.reasoning.heuristic import HeuristicReasoner
 from pipeline_doctor.agent.reasoning.llm import AssessmentDraft, FixDraft, HypothesisList, LLMReasoner
 from pipeline_doctor.demo.workspace import DemoWorkspace, run_pipeline
 from pipeline_doctor.evals.cases import list_eval_cases
 from pipeline_doctor.evals.injection import inject_fault
-from pipeline_doctor.incidents.models import FixKind, IncidentStatus, RootCauseCategory
+from pipeline_doctor.incidents.models import FixKind, FixProposal, IncidentStatus, RootCauseCategory
 from pipeline_doctor.jev.models import JevDecision
 from pipeline_doctor.jev.reviewer import RuleBasedJev
 from pipeline_doctor.mcp_server import create_mcp_server
@@ -136,6 +138,27 @@ def test_mcp_server_exposes_read_only_lineage_tool(demo_settings: Settings) -> N
     # Assert
     assert {"run_readonly_sql", "get_schema_drift", "diagnose_airflow_failure"} <= tools
     assert "raw.orders" in result.structured_content["upstream"]
+
+
+def test_failure_after_diagnosis_keeps_the_diagnosis(demo_workspace: DemoWorkspace, demo_settings: Settings) -> None:
+    # Setup
+    class FailingFixReasoner(HeuristicReasoner):
+        def propose_fix(self, investigation: Investigation, feedback: str) -> FixProposal:
+            raise ReasonerError("fix model unavailable")
+
+    _, failure = _break(demo_workspace, "nulls_orders_customer_id")
+    toolkit = build_toolkit(demo_settings, IncidentMemory(demo_workspace.root / "memory.jsonl"))
+    agent = PipelineDoctor(toolkit, FailingFixReasoner("duckdb"), UsageMeter(3.0, 15.0))
+
+    # Act
+    incident = agent.diagnose(failure)
+
+    # Assert
+    assert incident.status is IncidentStatus.FAILED
+    assert "fix model unavailable" in incident.error
+    assert incident.diagnosis is not None
+    assert incident.diagnosis.category is RootCauseCategory.SOURCE_NULL_SPIKE
+    assert incident.signature
 
 
 def test_unconfident_diagnosis_never_yields_a_code_change(

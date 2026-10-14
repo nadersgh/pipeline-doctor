@@ -107,15 +107,20 @@ class PipelineDoctor:
         incident = Incident(event=event, reasoner=self._reasoner.name)
         started = time.perf_counter()
         with traced("pipeline_doctor.diagnose", {"incident.id": incident.id, "reasoner": self._reasoner.name}) as span:
+            final = AgentState(event=event)
             try:
-                final = AgentState.model_validate(self._graph.invoke(AgentState(event=event)))
+                for snapshot in self._graph.stream(final, stream_mode="values"):
+                    final = AgentState.model_validate(snapshot)
             except Exception as error:
                 logger.exception(f"diagnosis of {event.describe()} failed")
                 return incident.model_copy(
                     update={
                         "status": IncidentStatus.FAILED,
                         "error": f"{type(error).__name__}: {error}",
-                        "metrics": self._metrics(started, 0),
+                        "diagnosis": final.diagnosis,
+                        "metrics": self._metrics(started, final.rounds),
+                        "signature": final.context.signature() if final.context else "",
+                        "injection_findings": final.context.injection_findings if final.context else [],
                     }
                 )
             metrics = self._metrics(started, final.rounds)
