@@ -9,7 +9,7 @@ from pipeline_doctor.observability.tracing import traced
 from pipeline_doctor.observability.usage import UsageMeter
 
 _MAX_ATTEMPTS = 2
-_MAX_OUTPUT_TOKENS = 4096
+_MAX_OUTPUT_TOKENS = 16000
 
 
 class LLMClient(Protocol):
@@ -17,7 +17,7 @@ class LLMClient(Protocol):
 
 
 class AnthropicClient:
-    """Structured output through a forced tool call whose input schema is the pydantic model."""
+    """Structured output through `output_config.format`, validated against the pydantic model."""
 
     def __init__(self, model: str, meter: UsageMeter, client: Any | None = None) -> None:
         self._model = model
@@ -26,11 +26,7 @@ class AnthropicClient:
 
     def generate[T: BaseModel](self, system: str, prompt: str, schema: type[T]) -> T:
         client: Any = self._client or self._create_client()
-        tool = {
-            "name": "respond",
-            "description": f"Return a {schema.__name__}.",
-            "input_schema": schema.model_json_schema(),
-        }
+        output_config = {"format": {"type": "json_schema", "schema": self._transform_schema(schema)}}
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             with traced("llm.anthropic", {"gen_ai.system": "anthropic", "schema": schema.__name__, "attempt": attempt}):
@@ -41,21 +37,28 @@ class AnthropicClient:
                         max_tokens=_MAX_OUTPUT_TOKENS,
                         system=system,
                         messages=messages,
-                        tools=[tool],
-                        tool_choice={"type": "tool", "name": "respond"},
+                        output_config=output_config,
                     )
                 except Exception as error:
                     raise ReasonerError(f"anthropic call failed: {error}") from error
                 self._meter.record_llm_call(self._model, response.usage.input_tokens, response.usage.output_tokens)
-            payload = next((block.input for block in response.content if block.type == "tool_use"), None)
+            text = next((block.text for block in response.content if block.type == "text"), "")
             try:
-                return schema.model_validate(payload)
+                return schema.model_validate_json(text)
             except ValidationError as error:
                 messages = [
                     *messages,
+                    {"role": "assistant", "content": text or "(empty)"},
                     {"role": "user", "content": f"Your previous output was invalid: {error}. Try again."},
                 ]
         raise ReasonerError(f"anthropic returned no valid {schema.__name__} after {_MAX_ATTEMPTS} attempts")
+
+    def _transform_schema(self, schema: type[BaseModel]) -> dict[str, Any]:
+        try:
+            from anthropic import transform_schema  # noqa: PLC0415 - optional dependency
+        except ImportError as error:
+            raise ReasonerError("install the `llm` extra to use the Anthropic reasoner") from error
+        return dict(transform_schema(schema))
 
     def _create_client(self) -> Any:
         try:

@@ -41,7 +41,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv python install
-      - run: uv sync
+      - run: uv sync --extra llm
       - run: uv run pytest -q
 
   eval-gate:
