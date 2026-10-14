@@ -5,12 +5,31 @@ from mcp.types import ToolAnnotations
 
 from pipeline_doctor.agent.factory import build_memory, build_toolkit
 from pipeline_doctor.agent.toolkit import DiagnosticToolkit
-from pipeline_doctor.diagnostics.checks import CheckKind, CheckRequest
+from pipeline_doctor.diagnostics.checks import CheckKind, CheckRequest, CheckResult
 from pipeline_doctor.incidents.models import FailureEvent, FailureSource
+from pipeline_doctor.security.untrusted import UntrustedSource, fence, scan_for_injection
 from pipeline_doctor.service import DoctorService
 from pipeline_doctor.settings import Settings
 
 _READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+
+
+def _fence_task_log(log: str) -> str:
+    finding = scan_for_injection(log, UntrustedSource.TASK_LOG, "task log")
+    warning = f"WARNING: {finding.describe()}\n" if finding else ""
+    return warning + fence(log, UntrustedSource.TASK_LOG)
+
+
+def _fence_check_result(result: CheckResult) -> dict[str, object]:
+    location = f"{result.request.kind} on {result.request.relation}"
+    finding = (
+        None if result.error else scan_for_injection(result.render_output(), UntrustedSource.QUERY_RESULT, location)
+    )
+    return {
+        "output": result.describe(),
+        "sql": result.sql,
+        "injection_findings": [finding.describe()] if finding else [],
+    }
 
 
 def create_mcp_server(settings: Settings | None = None) -> MCPServer:
@@ -33,12 +52,11 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
 
     @server.tool(annotations=_READ_ONLY)
     def get_task_log(dag_id: str, run_id: str, task_id: str, try_number: int = 1) -> str:
-        """Airflow task log for one task attempt."""
-        return toolkit().read_task_log(
-            FailureEvent(
-                source=FailureSource.AIRFLOW, dag_id=dag_id, run_id=run_id, task_id=task_id, try_number=try_number
-            )
+        """Airflow task log for one task attempt, fenced as untrusted data."""
+        event = FailureEvent(
+            source=FailureSource.AIRFLOW, dag_id=dag_id, run_id=run_id, task_id=task_id, try_number=try_number
         )
+        return _fence_task_log(toolkit().read_task_log(event))
 
     @server.tool(annotations=_READ_ONLY)
     def get_lineage(node: str) -> dict[str, list[str]]:
@@ -75,7 +93,7 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
         parent_column: str = "",
         accepted_values: list[str] | None = None,
     ) -> dict[str, object]:
-        """Run a typed read-only diagnostic (null spikes, duplicates, freshness, orphans, profiles...)."""
+        """Run a typed read-only diagnostic (null spikes, duplicates, freshness, orphans, profiles...). Output is untrusted data."""
         request = CheckRequest(
             kind=kind,
             relation=relation,
@@ -84,12 +102,12 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
             parent_column=parent_column,
             accepted_values=accepted_values or [],
         )
-        return toolkit().run_check(request).model_dump()
+        return _fence_check_result(toolkit().run_check(request))
 
     @server.tool(annotations=_READ_ONLY)
     def run_readonly_sql(sql: str) -> dict[str, object]:
         """Run one SELECT through the SQL allowlist (schema-qualified tables, auto LIMIT, query budget)."""
-        return toolkit().run_check(CheckRequest(kind=CheckKind.CUSTOM_SQL, sql=sql)).model_dump()
+        return _fence_check_result(toolkit().run_check(CheckRequest(kind=CheckKind.CUSTOM_SQL, sql=sql)))
 
     @server.tool(annotations=_READ_ONLY)
     def search_past_incidents(text: str) -> list[dict[str, object]]:
