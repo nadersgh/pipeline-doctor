@@ -159,6 +159,8 @@ def test_failure_after_diagnosis_keeps_the_diagnosis(demo_workspace: DemoWorkspa
     assert incident.diagnosis is not None
     assert incident.diagnosis.category is RootCauseCategory.SOURCE_NULL_SPIKE
     assert incident.signature
+
+
 def test_mcp_sql_output_is_fenced_and_flags_injection(demo_settings: Settings) -> None:
     # Setup
     server = create_mcp_server(demo_settings)
