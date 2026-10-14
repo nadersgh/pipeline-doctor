@@ -46,7 +46,7 @@ class ColumnInfo(_Artifact):
     data_type: str | None = None
 
 
-class TestMetadata(_Artifact):
+class TestMetadata(_Artifact):  # type: ignore[no-redef] # pydantic.mypy __init__ also takes **kwargs
     name: str
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -154,4 +154,5 @@ class DbtArtifacts:
         if not path.exists():
             raise DbtArtifactMissingError(path)
         logger.debug(f"read dbt artifact {path}")
-        return json.loads(path.read_text())
+        data: dict[str, Any] = json.loads(path.read_text())
+        return data

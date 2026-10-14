@@ -84,8 +84,7 @@ class DbtLineage:
         return None
 
     def _trace_one_hop(self, model: ManifestNode, column: str) -> tuple[ManifestNode, str] | None:
-        parents = [self.get(node_id) for node_id in model.depends_on.nodes]
-        parents = [parent for parent in parents if parent is not None]
+        parents = [parent for node_id in model.depends_on.nodes if (parent := self.get(node_id)) is not None]
         if not parents:
             return None
         parent_column = self._find_parent_column(model, column, parents)
