@@ -2,7 +2,7 @@
 #   docker compose up --build
 #   Airflow UI  http://localhost:8080  (admin / admin)
 #   Doctor API  http://localhost:8000  (Bearer dev-token)
-# Development credentials only. Do not expose these ports.
+# Development credentials only. Ports are bound to 127.0.0.1; do not widen them.
 
 x-workspace-env: &workspace-env
   PIPELINE_DOCTOR_DUCKDB_PATH: /workspace/demo/warehouse.duckdb
@@ -14,7 +14,7 @@ services:
       context: .
       dockerfile: docker/pipeline-doctor.Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       <<: *workspace-env
       PIPELINE_DOCTOR_DBT_PROJECT_DIR: /workspace/demo/project
@@ -42,7 +42,7 @@ services:
       context: .
       dockerfile: docker/airflow.Dockerfile
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       <<: *workspace-env
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
