@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from pipeline_doctor.evals.cases import EvalCase, EvalCaseKind, EvalSplit, list_eval_cases
 from pipeline_doctor.evals.catalogue import EvalCaseNotFoundError, SplitFilter, list_all_cases, select_cases
 from pipeline_doctor.evals.compound import list_compound_cases
+from pipeline_doctor.evals.harness import EvalReasonerFallbackError, check_no_fallbacks
 from pipeline_doctor.evals.holdout import list_holdout_cases
 from pipeline_doctor.evals.nofault import list_no_fault_cases
 from pipeline_doctor.evals.report import (
@@ -27,6 +29,7 @@ from pipeline_doctor.incidents.models import (
     Incident,
     RootCauseCategory,
 )
+from pipeline_doctor.settings import ReasonerKind
 
 _MIN_CONFIDENCE = 0.6
 
@@ -341,3 +344,18 @@ def test_catalogue_meets_rigor_minimums() -> None:
     assert all(len(case.acceptable_causes()) == 2 for case in list_compound_cases())
     assert len(list_no_fault_cases()) >= 2
     assert all(not case.data_sql and not case.commits for case in list_no_fault_cases())
+
+
+def test_llm_eval_fails_when_steps_fell_back_to_the_heuristic(tmp_path: Path) -> None:
+    # Setup
+    results = [_result("a", llm_fallbacks=2), _result("b")]
+
+    # Act / Assert
+    with pytest.raises(EvalReasonerFallbackError, match="2 anthropic steps in 1 of 2 runs"):
+        check_no_fallbacks(ReasonerKind.ANTHROPIC, results, tmp_path)
+
+
+def test_llm_eval_passes_without_fallbacks_and_heuristic_eval_never_checks(tmp_path: Path) -> None:
+    # Act / Assert
+    check_no_fallbacks(ReasonerKind.ANTHROPIC, [_result("a")], tmp_path)
+    check_no_fallbacks(ReasonerKind.HEURISTIC, [_result("a", llm_fallbacks=3)], tmp_path)

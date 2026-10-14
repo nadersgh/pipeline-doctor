@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from pipeline_doctor.agent.context import IncidentContext
 from pipeline_doctor.diagnostics.checks import CheckRequest, CheckResult
 from pipeline_doctor.incidents.models import Culprit, Diagnosis, FixProposal, RootCauseCategory
+from pipeline_doctor.observability.usage import UsageMeter
 
 
 class Hypothesis(BaseModel):
@@ -63,9 +64,10 @@ class Reasoner(Protocol):
 class FallbackReasoner:
     """Uses the primary reasoner and degrades to the fallback for any step where the primary fails."""
 
-    def __init__(self, primary: Reasoner, fallback: Reasoner) -> None:
+    def __init__(self, primary: Reasoner, fallback: Reasoner, meter: UsageMeter | None = None) -> None:
         self._primary = primary
         self._fallback = fallback
+        self._meter = meter or UsageMeter(0.0, 0.0)
 
     @property
     def name(self) -> str:
@@ -76,6 +78,7 @@ class FallbackReasoner:
             return self._primary.hypothesize(investigation)
         except ReasonerError:
             logger.exception(f"{self._primary.name} failed to hypothesize; using {self._fallback.name}")
+            self._meter.record_fallback()
             return self._fallback.hypothesize(investigation)
 
     def assess(self, investigation: Investigation) -> Assessment:
@@ -83,6 +86,7 @@ class FallbackReasoner:
             return self._primary.assess(investigation)
         except ReasonerError:
             logger.exception(f"{self._primary.name} failed to assess; using {self._fallback.name}")
+            self._meter.record_fallback()
             return self._fallback.assess(investigation)
 
     def propose_fix(self, investigation: Investigation, feedback: str) -> FixProposal:
@@ -90,4 +94,5 @@ class FallbackReasoner:
             return self._primary.propose_fix(investigation, feedback)
         except ReasonerError:
             logger.exception(f"{self._primary.name} failed to propose a fix; using {self._fallback.name}")
+            self._meter.record_fallback()
             return self._fallback.propose_fix(investigation, feedback)
