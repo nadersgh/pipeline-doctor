@@ -162,7 +162,7 @@ class PipelineDoctor:
                 "jev", self._route_after_review, ["request_approval", "propose_fix", "hypothesize"]
             )
         graph.add_edge("request_approval", END)
-        return graph.compile()
+        return graph.compile()  # type: ignore[return-value] # langgraph generics infer StateT, not AgentState
 
     def _detect(self, state: AgentState) -> dict[str, object]:
         with traced("agent.detect", {"event.source": state.event.source}):
@@ -266,9 +266,9 @@ class PipelineDoctor:
             return {"fix": fallback, "notes": [*state.notes, feedback]}
 
     def _review(self, state: AgentState) -> dict[str, object]:
+        if state.fix is None or self._jev is None:
+            raise RuntimeError("JEV review needs a reviewer and a proposed fix")
         with traced("agent.jev", {"reviewer": self._jev.name}) as span:
-            if state.fix is None or self._jev is None:
-                raise RuntimeError("JEV review needs a reviewer and a proposed fix")
             request = JevRequest(
                 investigation=state.investigation(),
                 fix=state.fix,

@@ -56,7 +56,7 @@ def apply_edits(project_dir: Path, edits: list[FileEdit]) -> dict[str, str]:
 
 
 def render_diff(project_dir: Path, contents: dict[str, str]) -> str:
-    chunks = []
+    chunks: list[str] = []
     for path, updated in sorted(contents.items()):
         original = read_project_file(project_dir, path)
         chunks.extend(
