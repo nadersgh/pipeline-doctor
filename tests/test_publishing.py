@@ -271,3 +271,23 @@ def test_github_publisher_setting_requires_repository_and_token() -> None:
     assert Settings(
         publisher=PublisherKind.GITHUB, github_repository="acme/dbt", github_token=SecretStr("t"), _env_file=None
     )
+
+
+def test_local_git_publisher_commits_without_a_configured_identity(
+    project: Path, pending_incident: Incident, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Setup
+    git = GitRepository(project)
+    git.init()
+    git.commit_all("initial")
+    for key in ("user.name", "user.email"):
+        git._run(["config", "--unset", key])
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    publisher = LocalGitPublisher(git, tmp_path / "prs")
+
+    # Act
+    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    assert git.show_file(pull_request.branch, "models/staging/stg_orders.sql") == "select 1\n"

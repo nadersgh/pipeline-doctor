@@ -85,7 +85,7 @@ class GitRepository:
         """Commits file contents onto a new branch from HEAD without touching the working tree or index."""
         prefix = self._run(["rev-parse", "--show-prefix"]).strip()
         index_file = Path(self._run(["rev-parse", "--absolute-git-dir"]).strip()) / "pipeline-doctor.index"
-        environment = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
+        environment = {**os.environ, "GIT_INDEX_FILE": str(index_file), **self._fallback_identity()}
         try:
             self._run(["read-tree", "HEAD"], environment)
             for path, content in files.items():
@@ -100,6 +100,23 @@ class GitRepository:
         finally:
             index_file.unlink(missing_ok=True)
         return commit
+
+    def _fallback_identity(self) -> dict[str, str]:
+        """Supplies a commit identity only when git has none configured, so commit-tree works on bare servers."""
+        try:
+            has_identity = bool(
+                self._run(["config", "user.name"]).strip() and self._run(["config", "user.email"]).strip()
+            )
+        except GitCommandError:
+            has_identity = False
+        if has_identity:
+            return {}
+        return {
+            "GIT_AUTHOR_NAME": "Pipeline Doctor",
+            "GIT_AUTHOR_EMAIL": "pipeline-doctor@example.com",
+            "GIT_COMMITTER_NAME": "Pipeline Doctor",
+            "GIT_COMMITTER_EMAIL": "pipeline-doctor@example.com",
+        }
 
     def _run(self, arguments: list[str], environment: dict[str, str] | None = None, stdin: str | None = None) -> str:
         logger.debug(f"run git {arguments[0]} {self._root}")

@@ -22,3 +22,6 @@ demo_project/logs/
 
 # Eval runs are generated; publish numbers in the README instead
 evals/results/
+
+# Editor settings
+.vscode/
