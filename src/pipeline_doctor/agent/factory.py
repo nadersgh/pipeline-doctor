@@ -20,7 +20,7 @@ from pipeline_doctor.warehouse.duckdb_warehouse import DuckDBWarehouse
 from pipeline_doctor.warehouse.guard import GuardedWarehouse, QueryBudget, SqlGuard
 from pipeline_doctor.warehouse.snowflake_warehouse import SnowflakeConnectionSettings, SnowflakeWarehouse
 
-_DEFAULT_MODELS = {ReasonerKind.ANTHROPIC: "claude-sonnet-4-5", ReasonerKind.OPENAI: "gpt-4.1"}
+_DEFAULT_MODELS = {ReasonerKind.ANTHROPIC: "claude-sonnet-5-5", ReasonerKind.OPENAI: "gpt-4.1"}
 
 
 def build_warehouse(settings: Settings) -> Warehouse:
