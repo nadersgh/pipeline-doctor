@@ -117,9 +117,9 @@ def test_fallback_reasoner_uses_fallback_when_primary_fails(investigation: Inves
     assert hypotheses[0].rationale == "fallback"
 
 
-def _anthropic_response(payload: dict[str, Any]) -> SimpleNamespace:
+def _anthropic_response(payload: dict[str, Any] | str) -> SimpleNamespace:
     return SimpleNamespace(
-        content=[SimpleNamespace(type="tool_use", input=payload)],
+        content=[SimpleNamespace(type="text", text=payload if isinstance(payload, str) else json.dumps(payload))],
         usage=SimpleNamespace(input_tokens=1_000, output_tokens=200),
     )
 
@@ -138,6 +138,27 @@ def test_anthropic_client_retries_invalid_output_and_meters_cost(meter: UsageMet
     assert result.hypotheses[0].culprit.relation == "raw.orders"
     assert metrics.llm_calls == 2
     assert metrics.cost_usd == pytest.approx(2 * (1_000 * 3.0 + 200 * 15.0) / 1_000_000)
+
+
+def test_anthropic_client_requests_json_schema_output_without_forcing_a_tool(meter: UsageMeter) -> None:
+    # Setup
+    requests: list[dict[str, Any]] = []
+
+    def create(**request: Any) -> SimpleNamespace:
+        requests.append(request)
+        return _anthropic_response(_HYPOTHESES)
+
+    client = AnthropicClient("claude-test", meter, client=SimpleNamespace(messages=SimpleNamespace(create=create)))
+
+    # Act
+    client.generate("system", "prompt", HypothesisList)
+
+    # Assert
+    assert "tool_choice" not in requests[0]
+    assert "tools" not in requests[0]
+    output_format = requests[0]["output_config"]["format"]
+    assert output_format["type"] == "json_schema"
+    assert output_format["schema"]["additionalProperties"] is False
 
 
 def test_anthropic_client_wraps_provider_errors(meter: UsageMeter) -> None:
