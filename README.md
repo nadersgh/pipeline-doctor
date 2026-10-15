@@ -42,6 +42,26 @@ Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs.
 
 Both reasoners missed `holdout_type_customers_id_prefixed` (an id column that starts arriving as a prefixed string). The heuristic guessed `source_missing_rows`; Claude answered `unknown` at 0.5 confidence and JEV escalated to a human, which is the safer failure. The heuristic's other miss was the right category with an operational fix where a code change was needed. Claude's only other miss, on dev, called a join fan-out a logic regression, but its patch was valid.
 
+**Model comparison, all 51 cases.** Haiku was run 3 times per case (mean, with the spread across repeats); Sonnet and the heuristic once, so the differences below are within run-to-run noise.
+
+| Metric (all 51 cases) | Heuristic | Claude Sonnet 5.5 | Claude Haiku 5.5 |
+| --- | --- | --- | --- |
+| Category accuracy | 98.0% | 96.1% | 96.7% (std 3.0, range 94.1% to 100%) |
+| Fix validity | 96.1% | 98.0% | 97.4% (std 1.1, range 96.1% to 98.0%) |
+| Holdout category / fix validity (12 cases) | 92% / 83% | 92% / 92% | 92% / 92% |
+| JEV proceed precision | 100% | 97.9% | 95.0% |
+| Latency per incident, mean / p95 | 0.14s / 0.26s | 22.8s / 53.8s | 19.6s / 40.9s |
+| Diagnostic queries per incident, mean | 1.7 | 6.0 | 3.6 |
+| Cost per full 51-case pass | $0 | $2.99 | $0.17 |
+| Cost per incident | $0 | $0.059 | $0.0034 |
+
+Haiku's fix validity matches Sonnet's within run-to-run noise, for about 1/18th of the price. Its weak spot is naming the culprit column for `source_missing_rows` (58% across repeats); a few cases flip between runs, which is why per-case agreement is 97%. Prices are $2 / $10 (Sonnet) and $0.10 / $0.50 (Haiku) per million tokens. To reproduce the Haiku run:
+
+```bash
+PIPELINE_DOCTOR_LLM_MODEL=claude-haiku-5-5 PIPELINE_DOCTOR_LLM_INPUT_COST_PER_MTOK=0.10 PIPELINE_DOCTOR_LLM_OUTPUT_COST_PER_MTOK=0.50 \
+  ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --split all --workers 4 --repeats 3
+```
+
 A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, or when the agent correctly escalates to the data owner. The same harness runs any reasoner:
 
 ```bash
@@ -275,7 +295,7 @@ uv run pre-commit run --all-files
 
 ## Roadmap
 
-- Run the eval with the GPT reasoner, add repeats for variance, and grow the holdout split beyond 12 cases.
+- Run the eval with the GPT reasoner and with repeats on Sonnet, and grow the holdout split beyond 12 cases.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.
