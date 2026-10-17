@@ -300,4 +300,8 @@ uv run pre-commit run --all-files
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.
 
+## License
+
+MIT, see [LICENSE](LICENSE).
+
 [![M8ven Score](https://m8ven.ai/badge/mcp/nadersgh-pipeline-doctor-6ypi0h?v=1041a332d53066530b1e27366b962d21)](https://m8ven.ai/mcp/nadersgh-pipeline-doctor-6ypi0h?s=readme)

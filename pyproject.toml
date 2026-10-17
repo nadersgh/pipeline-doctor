@@ -3,6 +3,8 @@ name = "pipeline-doctor"
 version = "0.1.0"
 description = "An agent that diagnoses broken dbt/Airflow pipelines and proposes reviewed fixes."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Nader Sghir", email = "sghir.nader@gmail.com" }
 ]
