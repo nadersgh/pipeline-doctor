@@ -12,6 +12,7 @@ from pipeline_doctor.service import DoctorService
 from pipeline_doctor.settings import Settings
 
 _READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+_DIAGNOSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 
 
 def _fence_task_log(log: str) -> str:
@@ -114,7 +115,7 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
         """Similar resolved incidents from the team's incident memory."""
         return [item.model_dump(mode="json") for item in toolkit().search_similar_incidents(text)]
 
-    @server.tool()
+    @server.tool(annotations=_DIAGNOSE)
     def diagnose_airflow_failure(dag_id: str, run_id: str, task_id: str, try_number: int = 1) -> str:
         """Run the full diagnosis and return the incident id; the fix still needs human approval to be opened."""
         service = DoctorService(settings)
