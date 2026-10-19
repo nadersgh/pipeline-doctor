@@ -29,6 +29,8 @@ def _failed_tests(workspace: DemoWorkspace) -> set[str]:
     [
         ("nofault_warehouse_lock", "dbt_source_freshness", "Could not set lock on file"),
         ("nofault_worker_killed", "dbt_build", "Negsignal.SIGKILL"),
+        ("nofault_network_timeout", "dbt_build", "Connection reset by peer"),
+        ("nofault_heartbeat_lost", "dbt_build", "Detected zombie job"),
     ],
 )
 def test_no_fault_case_fails_the_run_without_touching_data_or_code(

@@ -21,6 +21,24 @@ _NO_FAULT_CASES: list[EvalCase] = [
         split=EvalSplit.HOLDOUT,
         infra_failure=InfraFailureKind.WORKER_KILLED,
     ),
+    EvalCase(
+        case_id="nofault_network_timeout",
+        title="The warehouse connection is reset mid dbt build and Airflow queues a retry",
+        category=RootCauseCategory.UNKNOWN,
+        culprit_relation="",
+        accepted_fix_kinds={FixKind.OPERATIONAL},
+        split=EvalSplit.HOLDOUT,
+        infra_failure=InfraFailureKind.NETWORK_TIMEOUT,
+    ),
+    EvalCase(
+        case_id="nofault_heartbeat_lost",
+        title="The scheduler marks the running task a zombie after its heartbeat stops",
+        category=RootCauseCategory.UNKNOWN,
+        culprit_relation="",
+        accepted_fix_kinds={FixKind.OPERATIONAL},
+        split=EvalSplit.HOLDOUT,
+        infra_failure=InfraFailureKind.HEARTBEAT_LOST,
+    ),
 ]
 
 
