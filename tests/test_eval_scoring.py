@@ -381,3 +381,59 @@ def test_concurrent_eval_runs_never_share_a_template_workspace(tmp_path: Path, m
     # Assert
     assert roots[0] != roots[1]
     assert all(root.is_relative_to(tmp_path / "work") for root in roots)
+
+
+def _named(case_id: str, category: RootCauseCategory, confidence: float, *, correct: bool) -> CaseResult:
+    return _result(case_id, predicted_category=category, confidence=confidence, category_correct=correct)
+
+
+def test_score_card_separates_abstaining_from_naming_a_wrong_root_cause() -> None:
+    # Setup
+    results = [
+        _named("right", RootCauseCategory.SOURCE_NULL_SPIKE, 0.9, correct=True),
+        _named("confident-wrong", RootCauseCategory.CODE_JOIN_FANOUT, 0.8, correct=False),
+        _named("hesitant-wrong", RootCauseCategory.SOURCE_STALE, 0.4, correct=False),
+        _named("abstained-on-a-fault", RootCauseCategory.UNKNOWN, 0.5, correct=False),
+    ]
+
+    # Act
+    card = score_card(results)
+
+    # Assert
+    assert card.abstention_rate == 0.25
+    assert card.fault_abstention_rate == 0.25
+    assert card.confident_wrong_rate == 0.25
+    assert card.mean_confidence_right == 0.9
+    assert card.mean_confidence_wrong == 0.6
+
+
+def test_abstaining_on_a_no_fault_case_is_not_abstaining_on_a_fault() -> None:
+    # Setup
+    infra = _result(
+        "infra",
+        expected_category=RootCauseCategory.UNKNOWN,
+        predicted_category=RootCauseCategory.UNKNOWN,
+        confidence=0.8,
+        category_correct=True,
+    )
+
+    # Act
+    card = score_card([infra])
+
+    # Assert
+    assert card.abstention_rate == 1.0
+    assert card.fault_abstention_rate is None
+    assert card.mean_confidence_right is None
+
+
+def test_render_markdown_reports_abstention_and_calibration_rows() -> None:
+    # Setup
+    results = [_named("a", RootCauseCategory.SOURCE_NULL_SPIKE, 0.9, correct=True)]
+    summary = summarize("heuristic", datetime(2026, 10, 1, tzinfo=UTC), results, jev_enabled=True)
+
+    # Act
+    markdown = render_markdown(summary, results)
+
+    # Assert
+    assert "| Abstained on a real fault | 0.0% |" in markdown
+    assert "| Mean confidence, right / wrong named answers | 0.90 / n/a |" in markdown

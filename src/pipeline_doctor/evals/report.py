@@ -1,6 +1,7 @@
 import json
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from pipeline_doctor.evals.cases import EvalCaseKind, EvalSplit
 from pipeline_doctor.evals.catalogue import SplitFilter
 from pipeline_doctor.incidents.models import FixKind, RootCauseCategory
 from pipeline_doctor.jev.models import JevDecision
+
+CONFIDENT_ANSWER = 0.6  # the default JEV threshold: at or above it, a named root cause is sent to a human as trusted
 
 
 class CaseResult(BaseModel):
@@ -83,6 +86,15 @@ class ScoreCard(BaseModel):
     fix_validity: float
     primary_hit_rate: float
     false_positive_rate: float | None = Field(default=None, description="None when no no-fault case ran.")
+    abstention_rate: float = Field(default=0.0, description="Share of runs that answered `unknown`.")
+    fault_abstention_rate: float | None = Field(
+        default=None, description="Share of runs with a real fault that answered `unknown`; None when none ran."
+    )
+    confident_wrong_rate: float = Field(
+        default=0.0, description="Share of runs that named a wrong category at or above the confidence threshold."
+    )
+    mean_confidence_right: float | None = Field(default=None, description="Over named (not `unknown`) answers.")
+    mean_confidence_wrong: float | None = Field(default=None, description="Over named (not `unknown`) answers.")
     total_cost_usd: float
     total_latency_seconds: float
     p50_latency_seconds: float
@@ -148,6 +160,8 @@ _SPREAD_METRICS = [
     "fix_validity",
     "primary_hit_rate",
     "false_positive_rate",
+    "abstention_rate",
+    "confident_wrong_rate",
     "total_cost_usd",
     "p50_latency_seconds",
     "p95_latency_seconds",
@@ -218,6 +232,10 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
     latencies = sorted(result.latency_seconds for result in results) or [0.0]
     with_column = [result for result in results if result.column_correct is not None]
     no_fault = [result for result in results if result.false_positive is not None]
+    named = [result for result in results if _named_confidence(result) is not None]
+    right = [_named_confidence(result) for result in named if result.category_correct]
+    wrong = [_named_confidence(result) for result in named if not result.category_correct]
+    real_faults = [result for result in results if result.expected_category is not RootCauseCategory.UNKNOWN]
     return ScoreCard(
         cases=len({result.case_id for result in results}),
         runs=len(results),
@@ -229,6 +247,11 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
         fix_validity=_rate(results, "fix_valid"),
         primary_hit_rate=_rate(results, "primary_hit"),
         false_positive_rate=_rate(no_fault, "false_positive") if no_fault else None,
+        abstention_rate=_share(results, _abstained),
+        fault_abstention_rate=_share(real_faults, _abstained) if real_faults else None,
+        confident_wrong_rate=_share(results, _confident_wrong),
+        mean_confidence_right=_mean(right),
+        mean_confidence_wrong=_mean(wrong),
         total_cost_usd=round(sum(result.cost_usd for result in results), 4),
         total_latency_seconds=round(sum(latencies), 3),
         p50_latency_seconds=round(_percentile(latencies, 0.5), 3),
@@ -295,6 +318,7 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         f"| Primary hit (category and relation match any acceptable cause) | {overall.primary_hit_rate:.1%} |",
         f"| False-positive rate (no-fault cases) | {_percent(overall.false_positive_rate)} |",
         f"| Category accuracy on cases with distractor commits | {_distractor_accuracy(summary, results)} |",
+        *_abstention_rows(overall),
         *_jev_rows(summary),
         f"| Mean / p50 / p95 latency | {summary.mean_latency_seconds:.2f}s / {overall.p50_latency_seconds:.2f}s / "
         f"{summary.p95_latency_seconds:.2f}s |",
@@ -410,6 +434,17 @@ def _flag(value: bool | None) -> str:
     return "⚠️ yes" if value else "no"
 
 
+def _abstention_rows(overall: ScoreCard) -> list[str]:
+    return [
+        f"| Abstained (`unknown`), all runs | {overall.abstention_rate:.1%} |",
+        f"| Abstained on a real fault | {_percent(overall.fault_abstention_rate)} |",
+        f"| Confident wrong answers (wrong category at confidence >= {CONFIDENT_ANSWER}) | "
+        f"{overall.confident_wrong_rate:.1%} |",
+        f"| Mean confidence, right / wrong named answers | {_confidence(overall.mean_confidence_right)} / "
+        f"{_confidence(overall.mean_confidence_wrong)} |",
+    ]
+
+
 def _jev_rows(summary: EvalSummary) -> list[str]:
     if not summary.jev_enabled:
         return ["| JEV decision layer | disabled |"]
@@ -428,6 +463,35 @@ def _distractor_accuracy(summary: EvalSummary, results: list[CaseResult]) -> str
 
 def _catch_rate(rate: float | None) -> str:
     return "n/a (no wrong diagnoses)" if rate is None else f"{rate:.1%}"
+
+
+def _confidence(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
+
+
+def _named_confidence(result: CaseResult) -> float | None:
+    """The confidence of a named root cause; None when the run abstained or produced no diagnosis."""
+    if result.predicted_category in {None, RootCauseCategory.UNKNOWN}:
+        return None
+    return result.confidence
+
+
+def _abstained(result: CaseResult) -> bool:
+    return result.predicted_category is RootCauseCategory.UNKNOWN
+
+
+def _confident_wrong(result: CaseResult) -> bool:
+    confidence = _named_confidence(result)
+    return confidence is not None and confidence >= CONFIDENT_ANSWER and not result.category_correct
+
+
+def _share(results: list[CaseResult], condition: Callable[[CaseResult], bool]) -> float:
+    return round(sum(1 for result in results if condition(result)) / len(results), 4) if results else 0.0
+
+
+def _mean(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return round(statistics.fmean(present), 4) if present else None
 
 
 def _percent(rate: float | None) -> str:
