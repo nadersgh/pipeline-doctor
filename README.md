@@ -4,11 +4,13 @@ Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs.
 
 ## Results
 
-51 injected faults, each breaking a real dbt project on DuckDB: the `dev` split (39 cases across 10 root-cause categories, 3 carrying prompt-injection payloads), which the heuristic reasoner was written against, and an untuned `holdout` split (12 cases: unseen faults, 3 compound faults, 2 infrastructure failures with no code fault). The agent runs on the Airflow failure, then its fix is applied and the project rebuilt. Run on 2026-10-14, JEV on, one run per case, Claude reasoner `claude-sonnet-5-5` (priced at $2 / $10 per million tokens).
+53 injected failures, each breaking a real dbt project on DuckDB: the `dev` split (39 cases across 10 root-cause categories, 3 carrying prompt-injection payloads), which the heuristic reasoner was written against, and an untuned `holdout` split (14 cases: unseen faults, 3 compound faults, and 4 infrastructure failures with no code or data fault). The agent runs on the Airflow failure, then its fix is applied and the project rebuilt.
 
-**Dev split (39 cases).** The heuristic scores 100% because it was written alongside these cases, so read that column as a regression baseline.
+Every case is confirmed red before diagnosis, and after it the unpatched project is rerun once: all faults came back (100%) and all four infrastructure failures cleared on a plain rerun (100%), so a green build after a patch is attributable to the patch.
 
-| Fault type (root-cause category) | Cases | Heuristic: category / culprit / fix valid | Claude: category / culprit / fix valid |
+**Dev split (39 cases).** The heuristic scores 100% because it was written alongside these cases, so read that column as a regression baseline. Claude here is Sonnet, one run on 2026-10-14.
+
+| Fault type (root-cause category) | Cases | Heuristic: category / culprit / fix valid | Claude Sonnet: category / culprit / fix valid |
 | --- | --- | --- | --- |
 | `source_column_renamed` | 5 | 100% / 100% / 100% | 100% / 100% / 100% |
 | `source_type_changed` | 3 | 100% / 100% / 100% | 100% / 100% / 100% |
@@ -22,47 +24,41 @@ Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs.
 | `code_logic_regression` | 3 | 100% / 100% / 100% | 100% / 100% / 100% |
 | **All** | **39** | **100% / 100% / 100%** | **97% / 100% / 100%** |
 
-| Metric (dev) | Heuristic | Claude |
-| --- | --- | --- |
-| Category accuracy with a misleading recent commit | 100% (10/10) | 100% (10/10) |
-| JEV proceed rate / precision | 100% / 100% | 100% / 97% |
-| Latency per incident, mean / p95 | 0.14s / 0.23s | 21.4s / 51.0s |
-| Diagnostic queries per incident, mean | 1.67 | 6.0 |
-| LLM cost, 39 cases | $0 | $2.18 (123 calls, about $0.056 per incident) |
+**Model comparison.** The heuristic and Haiku ran all 53 cases (Haiku 3 times each, 159 runs, 2026-10-19, mean with the spread across repeats). Sonnet ran the first 51 cases once on 2026-10-14, before the two newest infrastructure cases and the rerun and abstention metrics existed, so those cells are blank. Treat differences of a point or two as noise.
 
-**Holdout split (12 cases, untuned).** Too small to separate the two reasoners: one case is 8 points.
-
-| Metric (holdout) | Heuristic | Claude |
-| --- | --- | --- |
-| Category accuracy | 92% (11/12) | 92% (11/12) |
-| Culprit accuracy (relation and column) | 92% | 92% |
-| Fix validity | 83% (10/12) | 92% (11/12) |
-| False positives on no-fault cases | 0% | 0% |
-| LLM cost | $0 | $0.82 (44 calls) |
-
-Both reasoners missed `holdout_type_customers_id_prefixed` (an id column that starts arriving as a prefixed string). The heuristic guessed `source_missing_rows`; Claude answered `unknown` at 0.5 confidence and JEV escalated to a human, which is the safer failure. The heuristic's other miss was the right category with an operational fix where a code change was needed. Claude's only other miss, on dev, called a join fan-out a logic regression, but its patch was valid.
-
-**Model comparison, all 51 cases.** Haiku was run 3 times per case (mean, with the spread across repeats); Sonnet and the heuristic once, so the differences below are within run-to-run noise.
-
-| Metric (all 51 cases) | Heuristic | Claude Sonnet 5.5 | Claude Haiku 5.5 |
+| Metric | Heuristic | Claude Sonnet 5.5 | Claude Haiku 5.5 |
 | --- | --- | --- | --- |
-| Category accuracy | 98.0% | 96.1% | 96.7% (std 3.0, range 94.1% to 100%) |
-| Fix validity | 96.1% | 98.0% | 97.4% (std 1.1, range 96.1% to 98.0%) |
-| Holdout category / fix validity (12 cases) | 92% / 83% | 92% / 92% | 92% / 92% |
-| JEV proceed precision | 100% | 97.9% | 95.0% |
-| Latency per incident, mean / p95 | 0.14s / 0.26s | 22.8s / 53.8s | 19.6s / 40.9s |
-| Diagnostic queries per incident, mean | 1.7 | 6.0 | 3.6 |
-| Cost per full 51-case pass | $0 | $2.99 | $0.17 |
-| Cost per incident | $0 | $0.059 | $0.0034 |
+| Cases / runs | 53 / 53 | 51 / 51 | 53 / 159 |
+| Category accuracy | 98.1% | 96.1% | 95.0% (std 1.1, range 94.3% to 96.2%) |
+| Fix validity | 96.2% | 98.0% | 97.5% (std 1.1, range 96.2% to 98.1%) |
+| Dev category / fix validity (39) | 100% / 100% | 97.4% / 100% | 96.6% / 99.2% |
+| Holdout category / fix validity | 92.9% / 85.7% (14) | 91.7% / 91.7% (12) | 90.5% / 92.9% (14) |
+| False positives on no-fault cases | 0% | 0% | 0% |
+| Abstained (`unknown`), all runs | 7.5% | 5.9% | 9.4% |
+| Abstained on a real fault | 0% | 2.0% | 2.0% |
+| Confident wrong answers (wrong category at confidence 0.6 or more) | 0% | 2.0% | 3.1% (std 1.1) |
+| Faults that reproduced / no-fault failures that cleared on rerun | 100% / 100% | | 100% / 100% |
+| JEV proceed precision | 100% | 97.9% | 92.3% |
+| Latency per incident, mean / p95 | 0.09s / 0.18s | 22.8s / 53.8s | 19.6s / 38.8s |
+| Diagnostic queries per incident, mean | 1.6 | 6.0 | 3.7 |
+| Cost per full pass | $0 | $2.99 | $0.18 |
+| Cost per incident | $0 | $0.059 | $0.0033 |
 
-Haiku's fix validity matches Sonnet's within run-to-run noise, for about 1/18th of the price. Its weak spot is naming the culprit column for `source_missing_rows` (58% across repeats); a few cases flip between runs, which is why per-case agreement is 97%. Prices are $2 / $10 (Sonnet) and $0.10 / $0.50 (Haiku) per million tokens. To reproduce the Haiku run:
+What the numbers say:
+
+- **Fix validity is the outcome that matters, and the two LLMs match it.** Haiku reaches Sonnet's fix validity for about 1/18th of the price, and 97.5% of its runs end with a green build and every test still running, or a correct escalation to a human.
+- **Abstaining.** Both LLMs answer `unknown` and escalate on the infrastructure failures (12 of 12 Haiku runs). On a real fault they abstain 2% of the time, always on `holdout_type_customers_id_prefixed` (an id column that starts arriving as a prefixed string), at 0.3 to 0.5 confidence. The heuristic never abstains on a real fault; it guessed `source_missing_rows` there.
+- **Confident wrong answers.** Haiku named a wrong category at 0.6 confidence or more in 5 of 159 runs: a join fan-out called a logic regression (3 runs, valid fix), a new category read as a type change (1, valid fix), and a dropped `COALESCE` read as missing rows (1, the only one with an invalid fix). JEV sent all five to a human as trusted, which is why its proceed precision is 92% against 100% for the heuristic; the dropped `COALESCE` case sat exactly on the 0.6 threshold.
+- **Haiku's weak spot is the culprit column.** It names the wrong column for `source_missing_rows` (`missing_customers__unrelated_sql` in 3 of 3 runs) and sometimes for late-arriving rows; a few cases flip between runs, so per-case agreement is 97.5%.
+
+Prices are $2 / $10 (Sonnet) and $0.10 / $0.50 (Haiku) per million tokens. To reproduce the Haiku run:
 
 ```bash
 PIPELINE_DOCTOR_LLM_MODEL=claude-haiku-5-5 PIPELINE_DOCTOR_LLM_INPUT_COST_PER_MTOK=0.10 PIPELINE_DOCTOR_LLM_OUTPUT_COST_PER_MTOK=0.50 \
   ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --split all --workers 4 --repeats 3
 ```
 
-A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, or when the agent correctly escalates to the data owner. The same harness runs any reasoner:
+A fix is valid when the patch applies and `dbt source freshness && dbt build` goes green with every baseline test still running, when the agent correctly escalates to the data owner, or, for a failure that was already clearing by itself, when it proposes no code change. A code fix is not credited if the failure did not come back on the unpatched rerun. The same harness runs any reasoner:
 
 ```bash
 ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --split all --workers 4   # or OPENAI_API_KEY + --reasoner openai
@@ -70,7 +66,7 @@ ANTHROPIC_API_KEY=... uv run pipeline-doctor eval --reasoner anthropic --split a
 
 The OpenAI reasoner has not been run through the eval yet.
 
-Without a working key every LLM step falls back to the heuristic, and the run reports heuristic numbers under the LLM's name. Before publishing an LLM run, check that `Total LLM cost / calls` is non-zero and that the log has no `failed to hypothesize`, `failed to assess` or `failed to propose a fix` lines.
+Without a working key every LLM step falls back to the heuristic. The eval counts those steps and exits with an error if any fell back, so a run labelled with an LLM cannot silently report rule-based scores. Still check that `Total LLM cost / calls` is non-zero before publishing.
 
 ## Demo
 
@@ -193,7 +189,7 @@ The rule reviewer is deterministic and free. Set `PIPELINE_DOCTOR_JEV_LLM_JUDGE=
 The catalogue has two splits:
 
 - `dev`: [`evals/cases.py`](src/pipeline_doctor/evals/cases.py), 26 faults across all 10 categories plus 10 hard variants that add a misleading recent commit (a docs edit, a comment-only SQL change, or a real SQL change outside the failing lineage). [`evals/adversarial.py`](src/pipeline_doctor/evals/adversarial.py) adds 3 prompt-injection variants: a real fault plus a payload in a commit message, a source column value, or a dbt error. The heuristic reasoner was written against the 36 non-adversarial cases.
-- `holdout`: 12 cases nobody tuned against. [`holdout.py`](src/pipeline_doctor/evals/holdout.py) has 7 single faults on new tables, columns, and mechanisms: an over-broad filter in a staging model, late-arriving customers, a column renamed in a model, a prefixed string id, an aggregate grain change, CDC updates appended as rows, and upper-cased enum values. [`compound.py`](src/pipeline_doctor/evals/compound.py) has 3 cases with two simultaneous faults. [`nofault.py`](src/pipeline_doctor/evals/nofault.py) has 2 runs that fail for infrastructure reasons with green data and no suspect commits: a held DuckDB write lock and an OOM-killed worker. Keep holdout untuned: once a reasoner, prompt, or JEV rule is changed to pass a holdout case, move that case to `dev` and add a fresh one.
+- `holdout`: 14 cases nobody tuned against. [`holdout.py`](src/pipeline_doctor/evals/holdout.py) has 7 single faults on new tables, columns, and mechanisms: an over-broad filter in a staging model, late-arriving customers, a column renamed in a model, a prefixed string id, an aggregate grain change, CDC updates appended as rows, and upper-cased enum values. [`compound.py`](src/pipeline_doctor/evals/compound.py) has 3 cases with two simultaneous faults. [`nofault.py`](src/pipeline_doctor/evals/nofault.py) has 4 runs that fail for infrastructure reasons with green data and no suspect commits, and clear on a plain rerun: a held DuckDB write lock, an OOM-killed worker, a warehouse connection reset, and a zombie task after a lost heartbeat. Keep holdout untuned: once a reasoner, prompt, or JEV rule is changed to pass a holdout case, move that case to `dev` and add a fresh one.
 
 For each case and repeat the harness:
 
@@ -295,7 +291,7 @@ uv run pre-commit run --all-files
 
 ## Roadmap
 
-- Run the eval with the GPT reasoner and with repeats on Sonnet, and grow the holdout split beyond 12 cases.
+- Run the eval with the GPT reasoner and with repeats on Sonnet, and grow the holdout split beyond 14 cases.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.
