@@ -10,6 +10,7 @@ from pipeline_doctor.evals.catalogue import get_case
 from pipeline_doctor.evals.harness import EvalHarness, EvalPlan
 from pipeline_doctor.evals.infra import run_case_pipeline
 from pipeline_doctor.evals.injection import inject_fault
+from pipeline_doctor.evals.report import RerunOutcome
 from pipeline_doctor.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -87,14 +88,15 @@ def test_harness_scores_compound_and_no_fault_cases(demo_settings: Settings, tmp
     assert by_case[compound.case_id, 0].reproduced_on_rerun is True
     assert by_case[no_fault.case_id, 0].reproduced_on_rerun is False
     assert run.summary.overall.fault_reproduction_rate == 1.0
-    assert run.summary.overall.no_fault_clear_rate == 1.0
+    assert run.summary.overall.transient_clear_rate == 1.0
+    assert run.summary.overall.flaky_rate == 0.0
 
 
 def test_harness_does_not_credit_a_fix_when_the_failure_clears_without_it(
     demo_settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Setup
-    monkeypatch.setattr(EvalHarness, "_reproduces", lambda self, workspace, opaque_id: False)
+    monkeypatch.setattr(EvalHarness, "_count_failed_reruns", lambda self, workspace, opaque_id: 0)
     plan = EvalPlan(cases=[get_case("renamed_orders_status")])
 
     # Act
@@ -104,4 +106,38 @@ def test_harness_does_not_credit_a_fix_when_the_failure_clears_without_it(
     result = run.results[0]
     assert result.reproduced_on_rerun is False
     assert not result.fix_valid
-    assert "cleared on an unpatched rerun" in result.fix_note
+    assert "0 of 3 failed" in result.fix_note
+
+
+def test_harness_does_not_credit_a_fix_when_the_failure_is_flaky(
+    demo_settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Setup
+    monkeypatch.setattr(EvalHarness, "_count_failed_reruns", lambda self, workspace, opaque_id: 1)
+    plan = EvalPlan(cases=[get_case("renamed_orders_status")])
+
+    # Act
+    run = EvalHarness(demo_settings, tmp_path / "work").run(plan, tmp_path / "results")
+
+    # Assert
+    result = run.results[0]
+    assert result.rerun_outcome is RerunOutcome.FLAKY
+    assert not result.fix_valid
+    assert "1 of 3 failed" in result.fix_note
+    assert run.summary.overall.flaky_rate == 1.0
+
+
+def test_self_healing_data_faults_fail_first_then_clear_on_every_rerun(demo_settings: Settings, tmp_path: Path) -> None:
+    # Setup
+    cases = [get_case("transient_late_customers_land"), get_case("transient_replayed_customers_restored")]
+    plan = EvalPlan(cases=cases)
+
+    # Act
+    run = EvalHarness(demo_settings, tmp_path / "work", control_reruns=2).run(plan, tmp_path / "results", workers=2)
+
+    # Assert
+    assert all(result.fault_triggered for result in run.results)
+    assert all(result.kind is EvalCaseKind.TRANSIENT for result in run.results)
+    assert all((result.reruns, result.reruns_failed) == (2, 0) for result in run.results)
+    assert all(result.rerun_outcome is RerunOutcome.CLEARED for result in run.results)
+    assert run.summary.overall.transient_clear_rate == 1.0

@@ -28,6 +28,8 @@ class IncidentScorer:
         }
         if case.kind is EvalCaseKind.NO_FAULT:
             return base.model_copy(update={**common, **self._score_no_fault(diagnosis, incident.fix)})
+        if case.kind is EvalCaseKind.TRANSIENT:
+            return base.model_copy(update={**common, **_score_transient(case, diagnosis, incident.fix)})
         return base.model_copy(update={**common, **_score_fault(case, diagnosis, incident.fix)})
 
     def _score_no_fault(self, diagnosis: Diagnosis, fix: FixProposal | None) -> dict[str, object]:
@@ -41,6 +43,19 @@ class IncidentScorer:
             "primary_hit": abstained,
             "false_positive": is_code_change(fix) or confident_culprit,
         }
+
+
+def _score_transient(case: EvalCase, diagnosis: Diagnosis, fix: FixProposal | None) -> dict[str, object]:
+    """A data fault that heals by itself: naming it or abstaining is right, any code change is wrong."""
+    if diagnosis.category is not RootCauseCategory.UNKNOWN:
+        return _score_fault(case, diagnosis, fix)
+    return {
+        "category_correct": True,
+        "relation_correct": True,
+        "culprit_correct": True,
+        "fix_kind_correct": not is_code_change(fix),
+        "primary_hit": True,
+    }
 
 
 def _score_fault(case: EvalCase, diagnosis: Diagnosis, fix: FixProposal | None) -> dict[str, object]:

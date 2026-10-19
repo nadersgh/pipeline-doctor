@@ -22,6 +22,16 @@ def inject_fault(workspace: DemoWorkspace, case: EvalCase) -> list[str]:
     return [_commit(workspace, commit) for commit in commits]
 
 
+def heal_fault(workspace: DemoWorkspace, case: EvalCase) -> None:
+    """Applies the case's data repair, as a late load or a replay would between two runs."""
+    if not case.heal_sql:
+        return
+    logger.info(f"heal data fault {case.case_id} in {workspace.duckdb_path}")
+    with duckdb.connect(str(workspace.duckdb_path)) as connection:
+        for statement in case.heal_sql:
+            connection.execute(statement)
+
+
 def _commit(workspace: DemoWorkspace, commit: InjectedCommit) -> str:
     for change in commit.changes:
         _apply_change(workspace.project_dir, change)

@@ -144,6 +144,9 @@ def run_eval(
     ] = SplitFilter.DEV,
     repeats: Annotated[int, typer.Option(min=1, help="Runs per case, each in a fresh workspace.")] = 1,
     workers: Annotated[int, typer.Option(min=1)] = 4,
+    control_reruns: Annotated[
+        int, typer.Option(min=1, help="Unpatched reruns after each diagnosis; a fix needs the failure on all of them.")
+    ] = 3,
     work_dir: Annotated[Path, typer.Option()] = Path(".pipeline_doctor/eval_workspaces"),
     output_dir: Annotated[Path, typer.Option()] = Path("evals/results"),
     jev: Annotated[bool | None, typer.Option("--jev/--no-jev", help="Override PIPELINE_DOCTOR_JEV_ENABLED.")] = None,
@@ -157,7 +160,7 @@ def run_eval(
     wanted = {item.strip() for item in cases.split(",") if item.strip()}
     plan = EvalPlan(cases=select_cases(split, wanted), repeats=repeats, split=split)
     try:
-        run = EvalHarness(_settings(reasoner, jev), work_dir).run(plan, output_dir, workers)
+        run = EvalHarness(_settings(reasoner, jev), work_dir, control_reruns).run(plan, output_dir, workers)
     except EvalReasonerFallbackError as error:
         console.print(f"[red]{error}[/red]")
         raise typer.Exit(code=1) from error

@@ -13,7 +13,7 @@ from pipeline_doctor.demo.workspace import DemoWorkspace, clone_workspace, creat
 from pipeline_doctor.evals.cases import EvalCase, EvalCaseKind
 from pipeline_doctor.evals.catalogue import SplitFilter
 from pipeline_doctor.evals.infra import run_case_pipeline
-from pipeline_doctor.evals.injection import inject_fault
+from pipeline_doctor.evals.injection import heal_fault, inject_fault
 from pipeline_doctor.evals.report import CaseResult, EvalSummary, render_markdown, render_step_latency, summarize
 from pipeline_doctor.evals.scoring import IncidentScorer, is_code_change, match_cause
 from pipeline_doctor.incidents.models import FixKind, Incident
@@ -41,7 +41,8 @@ class EvalRun(BaseModel):
 class EvalHarness:
     """Runs every case in an isolated copy of a green demo workspace and scores the agent against ground truth."""
 
-    def __init__(self, settings: Settings, work_dir: Path) -> None:
+    def __init__(self, settings: Settings, work_dir: Path, control_reruns: int = 3) -> None:
+        self._control_reruns = control_reruns
         self._settings = settings
         self._work_dir = work_dir / f"run_{datetime.now(UTC):%Y%m%dT%H%M%S}_{uuid.uuid4().hex[:6]}"
         self._scorer = IncidentScorer(settings.jev_min_confidence)
@@ -92,25 +93,39 @@ class EvalHarness:
         agent = build_agent(self._settings_for(workspace), IncidentMemory(workspace.root / "memory.jsonl"))
         incident = agent.diagnose(pipeline.failure)
         scored = self._scorer.score(base.model_copy(update={"fault_triggered": True}), case, incident)
-        reproduced = self._reproduces(workspace, opaque_id)
-        fix_valid, note = self._validate_fix(template, workspace, case, incident, reproduced)
+        heal_fault(workspace, case)
+        failed = self._count_failed_reruns(workspace, opaque_id)
+        fix_valid, note = self._validate_fix(template, workspace, case, incident, failed)
         logger.info(
             f"case {case.case_id}#{repeat}: {scored.predicted_category} (correct={scored.category_correct}) "
-            f"fix_valid={fix_valid} reproduced={reproduced}"
+            f"fix_valid={fix_valid} reruns_failed={failed}/{self._control_reruns}"
         )
-        return scored.model_copy(update={"fix_valid": fix_valid, "fix_note": note, "reproduced_on_rerun": reproduced})
+        return scored.model_copy(
+            update={
+                "fix_valid": fix_valid,
+                "fix_note": note,
+                "reruns": self._control_reruns,
+                "reruns_failed": failed,
+                "reproduced_on_rerun": failed == self._control_reruns,
+            }
+        )
 
-    def _reproduces(self, workspace: DemoWorkspace, opaque_id: str) -> bool:
-        """Reruns the unpatched project once: a failure that clears on its own proves nothing about a fix."""
-        return not run_pipeline(workspace, run_id=f"rerun__{opaque_id}").succeeded
+    def _count_failed_reruns(self, workspace: DemoWorkspace, opaque_id: str) -> int:
+        """Reruns the unpatched project: a failure that clears or flickers proves nothing about a fix."""
+        runs = [run_pipeline(workspace, run_id=f"rerun{index}__{opaque_id}") for index in range(self._control_reruns)]
+        return sum(1 for run in runs if not run.succeeded)
 
     def _validate_fix(
-        self, template: DemoWorkspace, workspace: DemoWorkspace, case: EvalCase, incident: Incident, reproduced: bool
+        self, template: DemoWorkspace, workspace: DemoWorkspace, case: EvalCase, incident: Incident, reruns_failed: int
     ) -> tuple[bool, str]:
         fix = incident.fix
         if case.kind is EvalCaseKind.NO_FAULT:
             if is_code_change(fix):
                 return False, "code change proposed for an infrastructure failure"
+            return True, "no code change proposed"
+        if case.kind is EvalCaseKind.TRANSIENT:
+            if is_code_change(fix):
+                return False, "code change proposed for a failure that healed by itself"
             return True, "no code change proposed"
         if fix is None:
             return False, "no fix proposed"
@@ -119,8 +134,11 @@ class EvalHarness:
             return False, f"{fix.kind} is not an acceptable remedy for {cause.category}"
         if fix.kind is FixKind.OPERATIONAL:
             return True, "correctly escalated to the data owner"
-        if not reproduced:
-            return False, "the failure cleared on an unpatched rerun, so a green build would prove nothing"
+        if reruns_failed != self._control_reruns:
+            return False, (
+                f"the failure did not come back on every unpatched rerun ({reruns_failed} of {self._control_reruns} "
+                "failed), so a green build would prove nothing"
+            )
         # A compound patch is checked against its matched fault alone; the other fault would keep the rerun red.
         target = workspace if case.kind is EvalCaseKind.SINGLE else self._inject_alone(template, cause)
         try:

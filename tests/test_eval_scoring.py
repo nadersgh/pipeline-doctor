@@ -12,6 +12,7 @@ from pipeline_doctor.evals.holdout import list_holdout_cases
 from pipeline_doctor.evals.nofault import list_no_fault_cases
 from pipeline_doctor.evals.report import (
     CaseResult,
+    RerunOutcome,
     measure_consistency,
     measure_spread,
     render_markdown,
@@ -453,7 +454,7 @@ def test_score_card_reports_how_often_failures_reproduce_on_an_unpatched_rerun()
 
     # Assert
     assert card.fault_reproduction_rate == 0.5
-    assert card.no_fault_clear_rate == 1.0
+    assert card.transient_clear_rate == 1.0
 
 
 def test_rerun_rates_are_absent_when_no_rerun_ran() -> None:
@@ -462,4 +463,81 @@ def test_rerun_rates_are_absent_when_no_rerun_ran() -> None:
 
     # Assert
     assert card.fault_reproduction_rate is None
-    assert card.no_fault_clear_rate is None
+    assert card.transient_clear_rate is None
+    assert card.flaky_rate is None
+
+
+def test_rerun_outcome_separates_reproduced_flaky_and_cleared_failures() -> None:
+    # Act
+    outcomes = [
+        _result("a", reruns=3, reruns_failed=3).rerun_outcome,
+        _result("b", reruns=3, reruns_failed=1).rerun_outcome,
+        _result("c", reruns=3, reruns_failed=0).rerun_outcome,
+        _result("d").rerun_outcome,
+    ]
+
+    # Assert
+    assert outcomes == [RerunOutcome.REPRODUCED, RerunOutcome.FLAKY, RerunOutcome.CLEARED, None]
+
+
+def test_results_saved_before_reruns_were_counted_still_classify_by_their_flag() -> None:
+    # Act
+    outcomes = [
+        _result("old-reproduced", reproduced_on_rerun=True).rerun_outcome,
+        _result("old-cleared", reproduced_on_rerun=False).rerun_outcome,
+    ]
+
+    # Assert
+    assert outcomes == [RerunOutcome.REPRODUCED, RerunOutcome.CLEARED]
+
+
+def test_score_card_counts_flaky_failures_apart_from_reproduced_and_cleared() -> None:
+    # Setup
+    results = [
+        _result("fault", reruns=3, reruns_failed=3),
+        _result("flaky-fault", reruns=3, reruns_failed=2),
+        _result("healed", kind=EvalCaseKind.TRANSIENT, reruns=3, reruns_failed=0),
+        _result("infra", kind=EvalCaseKind.NO_FAULT, reruns=3, reruns_failed=1),
+    ]
+
+    # Act
+    card = score_card(results)
+
+    # Assert
+    assert card.fault_reproduction_rate == 0.5
+    assert card.transient_clear_rate == 0.5
+    assert card.flaky_rate == 0.5
+
+
+def test_transient_case_accepts_naming_the_missing_rows_or_abstaining_but_never_a_code_change() -> None:
+    # Setup
+    case = _case("transient_late_customers_land")
+    scorer = IncidentScorer(_MIN_CONFIDENCE)
+
+    def score(category: RootCauseCategory, relation: str, fix_kind: FixKind) -> CaseResult:
+        incident = _incident(category, relation, fix=fix_kind)
+        return scorer.score(_base(case), case, incident)
+
+    # Act
+    named = score(RootCauseCategory.SOURCE_MISSING_ROWS, "raw.customers", FixKind.OPERATIONAL)
+    abstained = score(RootCauseCategory.UNKNOWN, "warehouse", FixKind.OPERATIONAL)
+    patched = score(RootCauseCategory.UNKNOWN, "warehouse", FixKind.MODEL_CHANGE)
+
+    # Assert
+    assert named.category_correct and named.fix_kind_correct
+    assert abstained.category_correct and abstained.primary_hit and abstained.fix_kind_correct
+    assert abstained.false_positive is None
+    assert not patched.fix_kind_correct
+
+
+def test_catalogue_includes_self_healing_cases_that_other_cases_do_not_share() -> None:
+    # Act
+    transient = [case for case in list_all_cases() if case.kind is EvalCaseKind.TRANSIENT]
+
+    # Assert
+    assert {case.case_id for case in transient} == {
+        "transient_late_customers_land",
+        "transient_replayed_customers_restored",
+    }
+    assert all(case.heal_sql and case.data_sql and case.split is EvalSplit.HOLDOUT for case in transient)
+    assert all(not case.heal_sql for case in list_all_cases() if case.kind is not EvalCaseKind.TRANSIENT)
