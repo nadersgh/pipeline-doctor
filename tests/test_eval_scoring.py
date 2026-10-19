@@ -437,3 +437,29 @@ def test_render_markdown_reports_abstention_and_calibration_rows() -> None:
     # Assert
     assert "| Abstained on a real fault | 0.0% |" in markdown
     assert "| Mean confidence, right / wrong named answers | 0.90 / n/a |" in markdown
+
+
+def test_score_card_reports_how_often_failures_reproduce_on_an_unpatched_rerun() -> None:
+    # Setup
+    results = [
+        _result("fault-a", reproduced_on_rerun=True),
+        _result("fault-b", reproduced_on_rerun=False),
+        _result("infra", kind=EvalCaseKind.NO_FAULT, reproduced_on_rerun=False),
+        _result("no-rerun"),
+    ]
+
+    # Act
+    card = score_card(results)
+
+    # Assert
+    assert card.fault_reproduction_rate == 0.5
+    assert card.no_fault_clear_rate == 1.0
+
+
+def test_rerun_rates_are_absent_when_no_rerun_ran() -> None:
+    # Act
+    card = score_card([_result("a")])
+
+    # Assert
+    assert card.fault_reproduction_rate is None
+    assert card.no_fault_clear_rate is None

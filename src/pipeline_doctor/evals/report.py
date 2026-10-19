@@ -37,6 +37,9 @@ class CaseResult(BaseModel):
     fix_kind_correct: bool = False
     fix_valid: bool = False
     fix_note: str = ""
+    reproduced_on_rerun: bool | None = Field(
+        default=None, description="Whether the failure came back on an unpatched rerun; None when no rerun ran."
+    )
     primary_hit: bool = False
     false_positive: bool | None = Field(default=None, description="Set only for no-fault cases.")
     jev_decision: JevDecision | None = None
@@ -86,6 +89,12 @@ class ScoreCard(BaseModel):
     fix_validity: float
     primary_hit_rate: float
     false_positive_rate: float | None = Field(default=None, description="None when no no-fault case ran.")
+    fault_reproduction_rate: float | None = Field(
+        default=None, description="Share of fault runs whose failure came back on an unpatched rerun."
+    )
+    no_fault_clear_rate: float | None = Field(
+        default=None, description="Share of no-fault runs whose failure cleared on an unpatched rerun."
+    )
     abstention_rate: float = Field(default=0.0, description="Share of runs that answered `unknown`.")
     fault_abstention_rate: float | None = Field(
         default=None, description="Share of runs with a real fault that answered `unknown`; None when none ran."
@@ -236,6 +245,8 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
     right = [_named_confidence(result) for result in named if result.category_correct]
     wrong = [_named_confidence(result) for result in named if not result.category_correct]
     real_faults = [result for result in results if result.expected_category is not RootCauseCategory.UNKNOWN]
+    rerun_faults = [r for r in results if r.kind is not EvalCaseKind.NO_FAULT and r.reproduced_on_rerun is not None]
+    rerun_no_faults = [r for r in results if r.kind is EvalCaseKind.NO_FAULT and r.reproduced_on_rerun is not None]
     return ScoreCard(
         cases=len({result.case_id for result in results}),
         runs=len(results),
@@ -247,6 +258,8 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
         fix_validity=_rate(results, "fix_valid"),
         primary_hit_rate=_rate(results, "primary_hit"),
         false_positive_rate=_rate(no_fault, "false_positive") if no_fault else None,
+        fault_reproduction_rate=_share(rerun_faults, _reproduced) if rerun_faults else None,
+        no_fault_clear_rate=_share(rerun_no_faults, _cleared) if rerun_no_faults else None,
         abstention_rate=_share(results, _abstained),
         fault_abstention_rate=_share(real_faults, _abstained) if real_faults else None,
         confident_wrong_rate=_share(results, _confident_wrong),
@@ -319,6 +332,7 @@ def render_markdown(summary: EvalSummary, results: list[CaseResult]) -> str:
         f"| False-positive rate (no-fault cases) | {_percent(overall.false_positive_rate)} |",
         f"| Category accuracy on cases with distractor commits | {_distractor_accuracy(summary, results)} |",
         *_abstention_rows(overall),
+        *_rerun_rows(overall),
         *_jev_rows(summary),
         f"| Mean / p50 / p95 latency | {summary.mean_latency_seconds:.2f}s / {overall.p50_latency_seconds:.2f}s / "
         f"{summary.p95_latency_seconds:.2f}s |",
@@ -434,6 +448,13 @@ def _flag(value: bool | None) -> str:
     return "⚠️ yes" if value else "no"
 
 
+def _rerun_rows(overall: ScoreCard) -> list[str]:
+    return [
+        f"| Faults that reproduced on an unpatched rerun | {_percent(overall.fault_reproduction_rate)} |",
+        f"| No-fault failures that cleared on a plain rerun | {_percent(overall.no_fault_clear_rate)} |",
+    ]
+
+
 def _abstention_rows(overall: ScoreCard) -> list[str]:
     return [
         f"| Abstained (`unknown`), all runs | {overall.abstention_rate:.1%} |",
@@ -474,6 +495,14 @@ def _named_confidence(result: CaseResult) -> float | None:
     if result.predicted_category in {None, RootCauseCategory.UNKNOWN}:
         return None
     return result.confidence
+
+
+def _reproduced(result: CaseResult) -> bool:
+    return result.reproduced_on_rerun is True
+
+
+def _cleared(result: CaseResult) -> bool:
+    return result.reproduced_on_rerun is False
 
 
 def _abstained(result: CaseResult) -> bool:
