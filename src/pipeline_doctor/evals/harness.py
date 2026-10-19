@@ -92,15 +92,20 @@ class EvalHarness:
         agent = build_agent(self._settings_for(workspace), IncidentMemory(workspace.root / "memory.jsonl"))
         incident = agent.diagnose(pipeline.failure)
         scored = self._scorer.score(base.model_copy(update={"fault_triggered": True}), case, incident)
-        fix_valid, note = self._validate_fix(template, workspace, case, incident)
+        reproduced = self._reproduces(workspace, opaque_id)
+        fix_valid, note = self._validate_fix(template, workspace, case, incident, reproduced)
         logger.info(
             f"case {case.case_id}#{repeat}: {scored.predicted_category} (correct={scored.category_correct}) "
-            f"fix_valid={fix_valid}"
+            f"fix_valid={fix_valid} reproduced={reproduced}"
         )
-        return scored.model_copy(update={"fix_valid": fix_valid, "fix_note": note})
+        return scored.model_copy(update={"fix_valid": fix_valid, "fix_note": note, "reproduced_on_rerun": reproduced})
+
+    def _reproduces(self, workspace: DemoWorkspace, opaque_id: str) -> bool:
+        """Reruns the unpatched project once: a failure that clears on its own proves nothing about a fix."""
+        return not run_pipeline(workspace, run_id=f"rerun__{opaque_id}").succeeded
 
     def _validate_fix(
-        self, template: DemoWorkspace, workspace: DemoWorkspace, case: EvalCase, incident: Incident
+        self, template: DemoWorkspace, workspace: DemoWorkspace, case: EvalCase, incident: Incident, reproduced: bool
     ) -> tuple[bool, str]:
         fix = incident.fix
         if case.kind is EvalCaseKind.NO_FAULT:
@@ -114,6 +119,8 @@ class EvalHarness:
             return False, f"{fix.kind} is not an acceptable remedy for {cause.category}"
         if fix.kind is FixKind.OPERATIONAL:
             return True, "correctly escalated to the data owner"
+        if not reproduced:
+            return False, "the failure cleared on an unpatched rerun, so a green build would prove nothing"
         # A compound patch is checked against its matched fault alone; the other fault would keep the rerun red.
         target = workspace if case.kind is EvalCaseKind.SINGLE else self._inject_alone(template, cause)
         try:

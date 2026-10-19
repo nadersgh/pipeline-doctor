@@ -84,3 +84,24 @@ def test_harness_scores_compound_and_no_fault_cases(demo_settings: Settings, tmp
     assert set(run.summary.by_kind) == {EvalCaseKind.COMPOUND, EvalCaseKind.NO_FAULT}
     assert run.summary.overall.false_positive_rate is not None
     assert (run.output_dir / "summary.md").exists()
+    assert by_case[compound.case_id, 0].reproduced_on_rerun is True
+    assert by_case[no_fault.case_id, 0].reproduced_on_rerun is False
+    assert run.summary.overall.fault_reproduction_rate == 1.0
+    assert run.summary.overall.no_fault_clear_rate == 1.0
+
+
+def test_harness_does_not_credit_a_fix_when_the_failure_clears_without_it(
+    demo_settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Setup
+    monkeypatch.setattr(EvalHarness, "_reproduces", lambda self, workspace, opaque_id: False)
+    plan = EvalPlan(cases=[get_case("renamed_orders_status")])
+
+    # Act
+    run = EvalHarness(demo_settings, tmp_path / "work").run(plan, tmp_path / "results")
+
+    # Assert
+    result = run.results[0]
+    assert result.reproduced_on_rerun is False
+    assert not result.fix_valid
+    assert "cleared on an unpatched rerun" in result.fix_note
