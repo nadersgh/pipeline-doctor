@@ -41,6 +41,8 @@ class EvalCaseKind(StrEnum):
 class InfraFailureKind(StrEnum):
     WAREHOUSE_LOCK = "warehouse_lock"
     WORKER_KILLED = "worker_killed"
+    NETWORK_TIMEOUT = "network_timeout"
+    HEARTBEAT_LOST = "heartbeat_lost"
 
 
 class EvalCase(BaseModel):
