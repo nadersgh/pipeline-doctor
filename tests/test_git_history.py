@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -101,3 +102,21 @@ def test_list_recent_changes_stops_at_the_deployed_commit(repository: GitReposit
 
     # Assert
     assert [change.message for change in changes] == ["feat: deployed change"]
+
+
+def test_create_branch_commit_runs_concurrently_without_corrupting_commits(repository: GitRepository) -> None:
+    # Setup
+    branches = {f"fix/{number}": f"select {number}\n" for number in range(8)}
+
+    # Act
+    with ThreadPoolExecutor(max_workers=len(branches)) as executor:
+        list(
+            executor.map(
+                lambda item: repository.create_branch_commit(item[0], "fix", {"models/stg_orders.sql": item[1]}),
+                branches.items(),
+            )
+        )
+
+    # Assert
+    assert {branch: repository.show_file(branch, "models/stg_orders.sql") for branch in branches} == branches
+    assert list(repository.root.joinpath(".git").glob("pipeline-doctor-*.index")) == []

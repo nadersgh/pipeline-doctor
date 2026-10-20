@@ -3,6 +3,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from loguru import logger
 from pydantic import BaseModel
@@ -84,7 +85,8 @@ class GitRepository:
     def create_branch_commit(self, branch: str, message: str, files: dict[str, str]) -> str:
         """Commits file contents onto a new branch from HEAD without touching the working tree or index."""
         prefix = self._run(["rev-parse", "--show-prefix"]).strip()
-        index_file = Path(self._run(["rev-parse", "--absolute-git-dir"]).strip()) / "pipeline-doctor.index"
+        git_dir = Path(self._run(["rev-parse", "--absolute-git-dir"]).strip())
+        index_file = git_dir / f"pipeline-doctor-{uuid4().hex}.index"
         environment = {**os.environ, "GIT_INDEX_FILE": str(index_file), **self._fallback_identity()}
         try:
             self._run(["read-tree", "HEAD"], environment)
