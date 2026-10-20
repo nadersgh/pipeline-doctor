@@ -1,13 +1,18 @@
 import fcntl
 import os
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from loguru import logger
+from pydantic import ValidationError
 
 from pipeline_doctor.incidents.models import Incident
+
+_INCIDENT_ID = re.compile(r"[A-Za-z0-9]+")
 
 
 class IncidentNotFoundError(LookupError):
@@ -25,7 +30,7 @@ class IncidentRepository:
         stamped = incident.model_copy(update={"updated_at": datetime.now(UTC)})
         path = self._path_for(stamped.id)
         logger.debug(f"write incident {path}")
-        temporary = path.with_suffix(".json.tmp")
+        temporary = path.with_name(f"{path.stem}.{uuid4().hex}.tmp")
         temporary.write_text(stamped.model_dump_json(indent=2))
         os.replace(temporary, path)
         return stamped
@@ -51,10 +56,17 @@ class IncidentRepository:
 
     def list_all(self) -> list[Incident]:
         logger.debug(f"read incidents {self._directory}")
-        incidents = [Incident.model_validate_json(path.read_text()) for path in self._directory.glob("*.json")]
+        incidents = [incident for path in self._directory.glob("*.json") if (incident := self._read_valid(path))]
         return sorted(incidents, key=lambda incident: incident.created_at, reverse=True)
 
+    def _read_valid(self, path: Path) -> Incident | None:
+        try:
+            return Incident.model_validate_json(path.read_text())
+        except (ValidationError, OSError):
+            logger.exception(f"skip unreadable incident {path}")
+            return None
+
     def _path_for(self, incident_id: str) -> Path:
-        if not incident_id.isalnum():
+        if not _INCIDENT_ID.fullmatch(incident_id):
             raise IncidentNotFoundError(incident_id)
         return self._directory / f"{incident_id}.json"
