@@ -150,104 +150,122 @@ def test_local_git_publisher_commits_to_a_branch(project: Path, pending_incident
     assert (tmp_path / "prs" / f"{pending_incident.id}.md").read_text().startswith("# [Pipeline Doctor]")
 
 
-def test_github_publisher_opens_a_draft_pull_request(pending_incident: Incident) -> None:
-    # Setup
-    calls: list[tuple[str, str, dict[str, object]]] = []
+class _FakeGitHub:
+    """Minimal in-memory GitHub Git Data API; `fail_on` makes matching requests answer 500."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def __init__(self, existing_branch: bool = False, open_pull_url: str | None = None, fail_on: str = "") -> None:
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+        self.branch_exists = existing_branch
+        self.open_pull_url = open_pull_url
+        self.fail_on = fail_on
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
         body = json.loads(request.content) if request.content else {}
-        calls.append((request.method, request.url.path, body))
-        if request.method == "GET" and "/git/ref/" in request.url.path:
+        self.calls.append((request.method, path, body))
+        if self.fail_on and path.endswith(self.fail_on):
+            return httpx.Response(500, json={"message": "boom"})
+        if request.method == "GET" and "/git/ref/heads/main" in path:
             return httpx.Response(200, json={"object": {"sha": "base-sha"}})
-        if request.method == "GET" and "/contents/" in request.url.path:
-            return httpx.Response(200, json={"sha": "file-sha"})
-        if request.method == "GET" and request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/pulls"):
+        if request.method == "GET" and path.endswith("/git/commits/base-sha"):
+            return httpx.Response(200, json={"tree": {"sha": "base-tree"}})
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": f"blob-{len(self.calls)}"})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": "new-tree"})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": "new-commit"})
+        if request.method == "POST" and path.endswith("/git/refs"):
+            status = 422 if self.branch_exists else 201
+            return httpx.Response(status, json={})
+        if request.method == "PATCH":
+            return httpx.Response(200, json={})
+        if request.method == "GET" and path.endswith("/pulls"):
+            return httpx.Response(200, json=[{"html_url": self.open_pull_url}] if self.open_pull_url else [])
+        if request.method == "POST" and path.endswith("/pulls"):
             return httpx.Response(201, json={"html_url": "https://github.com/acme/dbt/pull/7"})
-        return httpx.Response(201, json={})
+        return httpx.Response(404, json={})
 
-    client = httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(handler))
-    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", "analytics", client=client)
+    def requests(self, method: str, suffix: str) -> list[dict[str, object]]:
+        return [body for call_method, path, body in self.calls if call_method == method and path.endswith(suffix)]
+
+
+def _github_publisher(fake: _FakeGitHub, subdir: str = "") -> GitHubPublisher:
+    client = httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(fake.handle))
+    return GitHubPublisher("acme/dbt", SecretStr("token"), "main", subdir, client=client)
+
+
+def test_github_publisher_opens_a_draft_pull_request_from_a_single_commit(pending_incident: Incident) -> None:
+    # Setup
+    fake = _FakeGitHub()
+    files = {"models/staging/stg_orders.sql": "select 1\n", "models/staging/_stg_models.yml": "version: 2\n"}
 
     # Act
-    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+    pull_request = _github_publisher(fake, "analytics").open_draft(pending_incident, files)
 
     # Assert
-    put = next(call for call in calls if call[0] == "PUT")
-    pull = next(call for call in calls if call[0] == "POST" and call[1].endswith("/pulls"))
+    (tree,) = fake.requests("POST", "/git/trees")
+    (commit,) = fake.requests("POST", "/git/commits")
+    (pull,) = fake.requests("POST", "/pulls")
     assert pull_request.url == "https://github.com/acme/dbt/pull/7"
-    assert put[1] == "/repos/acme/dbt/contents/analytics/models/staging/stg_orders.sql"
-    assert put[2]["sha"] == "file-sha"
-    assert pull[2]["draft"] is True
-
-
-def _github_client(handler: httpx.MockTransport | object) -> httpx.Client:
-    return httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+    assert tree["base_tree"] == "base-tree"
+    assert [entry["path"] for entry in tree["tree"]] == [  # type: ignore[attr-defined]
+        "analytics/models/staging/_stg_models.yml",
+        "analytics/models/staging/stg_orders.sql",
+    ]
+    assert commit["parents"] == ["base-sha"]
+    assert fake.requests("POST", "/git/refs") == [
+        {"ref": f"refs/heads/pipeline-doctor/{pending_incident.id}", "sha": "new-commit"}
+    ]
+    assert pull["draft"] is True
 
 
 def test_github_publisher_resets_a_branch_left_by_a_failed_attempt(pending_incident: Incident) -> None:
     # Setup
-    calls: list[tuple[str, str]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((request.method, request.url.path))
-        if request.method == "GET" and "/git/ref/" in request.url.path:
-            return httpx.Response(200, json={"object": {"sha": "base-sha"}})
-        if request.method == "POST" and request.url.path.endswith("/git/refs"):
-            return httpx.Response(422, json={"message": "Reference already exists"})
-        if request.method == "GET" and request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        if request.method == "GET":
-            return httpx.Response(404, json={})
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(201, json={"html_url": "https://github.com/acme/dbt/pull/8"})
-        return httpx.Response(200, json={})
-
-    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+    fake = _FakeGitHub(existing_branch=True)
 
     # Act
-    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+    pull_request = _github_publisher(fake).open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
 
     # Assert
-    assert pull_request.url == "https://github.com/acme/dbt/pull/8"
-    assert ("PATCH", f"/repos/acme/dbt/git/refs/heads/pipeline-doctor/{pending_incident.id}") in calls
+    assert pull_request.url == "https://github.com/acme/dbt/pull/7"
+    assert ("PATCH", f"/repos/acme/dbt/git/refs/heads/pipeline-doctor/{pending_incident.id}") in [
+        (method, path) for method, path, _ in fake.calls
+    ]
 
 
 def test_github_publisher_reuses_an_already_open_pull_request(pending_incident: Incident) -> None:
     # Setup
-    calls: list[tuple[str, str]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((request.method, request.url.path))
-        if request.method == "GET" and "/git/ref/" in request.url.path:
-            return httpx.Response(200, json={"object": {"sha": "base-sha"}})
-        if request.method == "GET" and request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[{"html_url": "https://github.com/acme/dbt/pull/3"}])
-        if request.method == "GET":
-            return httpx.Response(404, json={})
-        return httpx.Response(201, json={})
-
-    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+    fake = _FakeGitHub(open_pull_url="https://github.com/acme/dbt/pull/3")
 
     # Act
-    pull_request = publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+    pull_request = _github_publisher(fake).open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
 
     # Assert
     assert pull_request.url == "https://github.com/acme/dbt/pull/3"
-    assert ("POST", "/repos/acme/dbt/pulls") not in calls
+    assert fake.requests("POST", "/pulls") == []
+
+
+def test_github_publisher_leaves_no_branch_when_a_blob_upload_fails(pending_incident: Incident) -> None:
+    # Setup
+    fake = _FakeGitHub(fail_on="/git/blobs")
+
+    # Act
+    with pytest.raises(PublishError, match="github POST"):
+        _github_publisher(fake).open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+
+    # Assert
+    assert fake.requests("POST", "/git/refs") == []
+    assert fake.requests("PATCH", f"pipeline-doctor/{pending_incident.id}") == []
 
 
 def test_github_publisher_wraps_api_failures(pending_incident: Incident) -> None:
     # Setup
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"message": "boom"})
-
-    publisher = GitHubPublisher("acme/dbt", SecretStr("token"), "main", client=_github_client(handler))
+    fake = _FakeGitHub(fail_on="/git/ref/heads/main")
 
     # Act / Assert
     with pytest.raises(PublishError, match="github GET"):
-        publisher.open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
+        _github_publisher(fake).open_draft(pending_incident, {"models/staging/stg_orders.sql": "select 1\n"})
 
 
 def test_concurrent_approvals_open_only_one_pull_request(
