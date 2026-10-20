@@ -1,4 +1,7 @@
+import fcntl
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +29,18 @@ class IncidentRepository:
         temporary.write_text(stamped.model_dump_json(indent=2))
         os.replace(temporary, path)
         return stamped
+
+    @contextmanager
+    def lock(self, incident_id: str) -> Iterator[None]:
+        """Holds an exclusive advisory lock on one incident across threads and processes on the same host."""
+        lock_path = self._path_for(incident_id).with_suffix(".lock")
+        logger.debug(f"lock incident {lock_path}")
+        with lock_path.open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def get(self, incident_id: str) -> Incident:
         path = self._path_for(incident_id)

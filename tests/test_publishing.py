@@ -282,6 +282,43 @@ def test_concurrent_approvals_open_only_one_pull_request(
     assert outcomes.count("conflict") == 3
 
 
+def test_approvals_from_separate_service_instances_open_only_one_pull_request(
+    project: Path, repository: IncidentRepository, pending_incident: Incident, tmp_path: Path
+) -> None:
+    # Setup
+    class SlowPublisher:
+        def __init__(self) -> None:
+            self.opened = 0
+
+        def open_draft(self, incident: Incident, files: dict[str, str]) -> PullRequest:
+            self.opened += 1
+            time.sleep(0.05)
+            return PullRequest(url="https://example.test/pr/1", branch="b", title="t")
+
+    publisher = SlowPublisher()
+    repository.save(pending_incident)
+    services = [
+        ApprovalService(
+            IncidentRepository(tmp_path / "incidents"), publisher, IncidentMemory(tmp_path / "m.jsonl"), project
+        )
+        for _ in range(4)
+    ]
+
+    def approve(service: ApprovalService) -> str:
+        try:
+            return service.approve(pending_incident.id, "nader").status
+        except IncidentApprovalError:
+            return "conflict"
+
+    # Act
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outcomes = list(pool.map(approve, services))
+
+    # Assert
+    assert publisher.opened == 1
+    assert outcomes.count("conflict") == 3
+
+
 def test_incident_save_leaves_no_temporary_file(repository: IncidentRepository, pending_incident: Incident) -> None:
     # Act
     repository.save(pending_incident)

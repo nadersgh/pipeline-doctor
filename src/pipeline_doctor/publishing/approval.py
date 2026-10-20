@@ -1,5 +1,3 @@
-import threading
-from collections import defaultdict
 from pathlib import Path
 
 from loguru import logger
@@ -26,25 +24,18 @@ class ApprovalService:
         self._publisher = publisher
         self._memory = memory
         self._project_dir = project_dir
-        self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
-        self._locks_guard = threading.Lock()
 
     def approve(self, incident_id: str, approver: str) -> Incident:
-        with self._lock_for(incident_id):
+        with self._repository.lock(incident_id):
             return self._approve(incident_id, approver)
 
     def reject(self, incident_id: str, reviewer: str, reason: str) -> Incident:
-        with self._lock_for(incident_id):
+        with self._repository.lock(incident_id):
             incident = self._get_pending(incident_id)
             rejected = incident.model_copy(
                 update={"status": IncidentStatus.REJECTED, "approved_by": reviewer, "reviewer_note": reason}
             )
             return self._repository.save(rejected)
-
-    def _lock_for(self, incident_id: str) -> threading.Lock:
-        """One lock per incident so concurrent approvals cannot both pass the pending check (single process)."""
-        with self._locks_guard:
-            return self._locks[incident_id]
 
     def _approve(self, incident_id: str, approver: str) -> Incident:
         incident = self._get_pending(incident_id)
