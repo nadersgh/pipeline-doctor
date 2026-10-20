@@ -8,7 +8,7 @@ import pytest
 from pydantic import SecretStr
 
 from pipeline_doctor.incidents.models import Incident, IncidentStatus
-from pipeline_doctor.incidents.repository import IncidentRepository
+from pipeline_doctor.incidents.repository import IncidentNotFoundError, IncidentRepository
 from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory, PastIncident
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
@@ -325,6 +325,38 @@ def test_incident_save_leaves_no_temporary_file(repository: IncidentRepository, 
 
     # Assert
     assert [path.suffix for path in (repository._directory).iterdir()] == [".json"]
+
+
+def test_incident_save_from_concurrent_writers_leaves_valid_json(
+    repository: IncidentRepository, pending_incident: Incident
+) -> None:
+    # Act
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: repository.save(pending_incident), range(32)))
+
+    # Assert
+    assert repository.get(pending_incident.id).id == pending_incident.id
+    assert [path.suffix for path in repository._directory.iterdir()] == [".json"]
+
+
+def test_incident_list_all_skips_a_corrupt_file(repository: IncidentRepository, pending_incident: Incident) -> None:
+    # Setup
+    repository.save(pending_incident)
+    (repository._directory / "broken.json").write_text("{not json")
+
+    # Act
+    incidents = repository.list_all()
+
+    # Assert
+    assert [incident.id for incident in incidents] == [pending_incident.id]
+
+
+@pytest.mark.parametrize("incident_id", ["١٢٣", "a/b", "..", "a b", ""])
+def test_incident_get_rejects_ids_that_are_not_ascii_alphanumeric(
+    repository: IncidentRepository, incident_id: str
+) -> None:
+    with pytest.raises(IncidentNotFoundError):
+        repository.get(incident_id)
 
 
 def test_github_publisher_setting_requires_repository_and_token() -> None:
