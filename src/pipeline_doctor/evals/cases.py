@@ -36,6 +36,7 @@ class EvalCaseKind(StrEnum):
     SINGLE = "single"
     COMPOUND = "compound"
     NO_FAULT = "no_fault"
+    TRANSIENT = "transient"
 
 
 class InfraFailureKind(StrEnum):
@@ -64,11 +65,17 @@ class EvalCase(BaseModel):
     infra_failure: InfraFailureKind | None = Field(
         default=None, description="Pipeline fails for an operational reason outside the project; no fault exists."
     )
+    heal_sql: list[str] = Field(
+        default_factory=list,
+        description="Data repair applied after the first failure and before the control reruns, as a late load would.",
+    )
 
     @property
     def kind(self) -> EvalCaseKind:
         if self.infra_failure is not None:
             return EvalCaseKind.NO_FAULT
+        if self.heal_sql:
+            return EvalCaseKind.TRANSIENT
         return EvalCaseKind.COMPOUND if self.components else EvalCaseKind.SINGLE
 
     def acceptable_causes(self) -> list["EvalCase"]:

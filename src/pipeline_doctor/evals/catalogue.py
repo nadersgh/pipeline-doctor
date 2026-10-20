@@ -4,6 +4,7 @@ from pipeline_doctor.evals.cases import EvalCase, EvalSplit, list_eval_cases
 from pipeline_doctor.evals.compound import list_compound_cases
 from pipeline_doctor.evals.holdout import list_holdout_cases
 from pipeline_doctor.evals.nofault import list_no_fault_cases
+from pipeline_doctor.evals.transient import list_transient_cases
 
 
 class SplitFilter(StrEnum):
@@ -20,7 +21,13 @@ class EvalCaseNotFoundError(LookupError):
 
 
 def list_all_cases() -> list[EvalCase]:
-    return [*list_eval_cases(), *list_holdout_cases(), *list_compound_cases(), *list_no_fault_cases()]
+    return [
+        *list_eval_cases(),
+        *list_holdout_cases(),
+        *list_compound_cases(),
+        *list_no_fault_cases(),
+        *list_transient_cases(),
+    ]
 
 
 def select_cases(split: SplitFilter, case_ids: set[str]) -> list[EvalCase]:

@@ -98,7 +98,7 @@ The full table, the Snowflake status and the prompt-injection tests: [docs/guard
 
 ## Roadmap
 
-- Run the eval with the GPT reasoner and with repeats on Sonnet, and grow the holdout split beyond 14 cases.
+- Run the eval with the GPT reasoner and with repeats on Sonnet, and grow the holdout split beyond 16 cases.
 - A JEV adversarial eval: mutate correct diagnoses and fixes (wrong culprit, deleted test, write SQL) and measure the catch rate.
 - Point the dbt profile at Snowflake. The adapter, guard dialect, and fix transpilation (sqlglot) are already in place.
 - A Langfuse dashboard on the OTLP export, and Slack interactive buttons in place of slash commands.

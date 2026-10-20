@@ -3,6 +3,7 @@ import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -12,6 +13,14 @@ from pipeline_doctor.evals.catalogue import SplitFilter
 from pipeline_doctor.incidents.models import FixKind, RootCauseCategory
 from pipeline_doctor.jev.models import JevDecision
 
+
+class RerunOutcome(StrEnum):
+    REPRODUCED = "reproduced"
+    FLAKY = "flaky"
+    CLEARED = "cleared"
+
+
+_FAULT_KINDS = {EvalCaseKind.SINGLE, EvalCaseKind.COMPOUND}
 CONFIDENT_ANSWER = 0.6  # the default JEV threshold: at or above it, a named root cause is sent to a human as trusted
 
 
@@ -38,8 +47,10 @@ class CaseResult(BaseModel):
     fix_valid: bool = False
     fix_note: str = ""
     reproduced_on_rerun: bool | None = Field(
-        default=None, description="Whether the failure came back on an unpatched rerun; None when no rerun ran."
+        default=None, description="Whether the failure came back on every unpatched rerun; None when none ran."
     )
+    reruns: int = Field(default=0, description="Unpatched control reruns of the project after the diagnosis.")
+    reruns_failed: int = Field(default=0, description="How many of those reruns failed.")
     primary_hit: bool = False
     false_positive: bool | None = Field(default=None, description="Set only for no-fault cases.")
     jev_decision: JevDecision | None = None
@@ -52,6 +63,17 @@ class CaseResult(BaseModel):
     queries_blocked: int = 0
     injection_findings: int = 0
     error: str | None = None
+
+    @property
+    def rerun_outcome(self) -> RerunOutcome | None:
+        """Every control rerun failed, none did, or some did; results saved before reruns counted use the flag."""
+        if self.reruns:
+            if self.reruns_failed == self.reruns:
+                return RerunOutcome.REPRODUCED
+            return RerunOutcome.CLEARED if self.reruns_failed == 0 else RerunOutcome.FLAKY
+        if self.reproduced_on_rerun is None:
+            return None
+        return RerunOutcome.REPRODUCED if self.reproduced_on_rerun else RerunOutcome.CLEARED
 
     @property
     def trusted_correctly(self) -> bool:
@@ -90,10 +112,13 @@ class ScoreCard(BaseModel):
     primary_hit_rate: float
     false_positive_rate: float | None = Field(default=None, description="None when no no-fault case ran.")
     fault_reproduction_rate: float | None = Field(
-        default=None, description="Share of fault runs whose failure came back on an unpatched rerun."
+        default=None, description="Share of fault runs whose failure came back on every unpatched rerun."
     )
-    no_fault_clear_rate: float | None = Field(
-        default=None, description="Share of no-fault runs whose failure cleared on an unpatched rerun."
+    transient_clear_rate: float | None = Field(
+        default=None, description="Share of no-fault and self-healing runs that cleared on every unpatched rerun."
+    )
+    flaky_rate: float | None = Field(
+        default=None, description="Share of runs whose failure came back on some unpatched reruns but not all."
     )
     abstention_rate: float = Field(default=0.0, description="Share of runs that answered `unknown`.")
     fault_abstention_rate: float | None = Field(
@@ -245,8 +270,9 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
     right = [_named_confidence(result) for result in named if result.category_correct]
     wrong = [_named_confidence(result) for result in named if not result.category_correct]
     real_faults = [result for result in results if result.expected_category is not RootCauseCategory.UNKNOWN]
-    rerun_faults = [r for r in results if r.kind is not EvalCaseKind.NO_FAULT and r.reproduced_on_rerun is not None]
-    rerun_no_faults = [r for r in results if r.kind is EvalCaseKind.NO_FAULT and r.reproduced_on_rerun is not None]
+    rerun_faults = [r for r in results if r.kind in _FAULT_KINDS and r.rerun_outcome is not None]
+    rerun_transients = [r for r in results if r.kind not in _FAULT_KINDS and r.rerun_outcome is not None]
+    rerun_all = [r for r in results if r.rerun_outcome is not None]
     return ScoreCard(
         cases=len({result.case_id for result in results}),
         runs=len(results),
@@ -259,7 +285,8 @@ def score_card(results: list[CaseResult]) -> ScoreCard:
         primary_hit_rate=_rate(results, "primary_hit"),
         false_positive_rate=_rate(no_fault, "false_positive") if no_fault else None,
         fault_reproduction_rate=_share(rerun_faults, _reproduced) if rerun_faults else None,
-        no_fault_clear_rate=_share(rerun_no_faults, _cleared) if rerun_no_faults else None,
+        transient_clear_rate=_share(rerun_transients, _cleared) if rerun_transients else None,
+        flaky_rate=_share(rerun_all, _flaky) if rerun_all else None,
         abstention_rate=_share(results, _abstained),
         fault_abstention_rate=_share(real_faults, _abstained) if real_faults else None,
         confident_wrong_rate=_share(results, _confident_wrong),
@@ -450,8 +477,9 @@ def _flag(value: bool | None) -> str:
 
 def _rerun_rows(overall: ScoreCard) -> list[str]:
     return [
-        f"| Faults that reproduced on an unpatched rerun | {_percent(overall.fault_reproduction_rate)} |",
-        f"| No-fault failures that cleared on a plain rerun | {_percent(overall.no_fault_clear_rate)} |",
+        f"| Faults that reproduced on every unpatched rerun | {_percent(overall.fault_reproduction_rate)} |",
+        f"| No-fault and self-healing failures that cleared on every rerun | {_percent(overall.transient_clear_rate)} |",
+        f"| Flaky on rerun (failed some unpatched reruns, not all) | {_percent(overall.flaky_rate)} |",
     ]
 
 
@@ -498,11 +526,15 @@ def _named_confidence(result: CaseResult) -> float | None:
 
 
 def _reproduced(result: CaseResult) -> bool:
-    return result.reproduced_on_rerun is True
+    return result.rerun_outcome is RerunOutcome.REPRODUCED
 
 
 def _cleared(result: CaseResult) -> bool:
-    return result.reproduced_on_rerun is False
+    return result.rerun_outcome is RerunOutcome.CLEARED
+
+
+def _flaky(result: CaseResult) -> bool:
+    return result.rerun_outcome is RerunOutcome.FLAKY
 
 
 def _abstained(result: CaseResult) -> bool:

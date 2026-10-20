@@ -2,7 +2,7 @@
 
 53 injected failures, each breaking a real dbt project on DuckDB: the `dev` split (39 cases across 10 root-cause categories, 3 carrying prompt-injection payloads), which the heuristic reasoner was written against, and an untuned `holdout` split (14 cases: unseen faults, 3 compound faults, and 4 infrastructure failures with no code or data fault). The agent runs on the Airflow failure, then its fix is applied and the project rebuilt.
 
-Every case is confirmed red before diagnosis, and after it the unpatched project is rerun once: all faults came back (100%) and all four infrastructure failures cleared on a plain rerun (100%), so a green build after a patch is attributable to the patch.
+Every case is confirmed red before diagnosis, and after it the unpatched project is rerun once: all faults came back (100%) and all four infrastructure failures cleared on a plain rerun (100%), so a green build after a patch is attributable to the patch. The harness now reruns the unpatched project three times and also covers two self-healing data faults, which are not in the numbers below.
 
 **Dev split (39 cases).** The heuristic scores 100% because it was written alongside these cases, so read that column as a regression baseline. Claude here is Sonnet, one run on 2026-10-14.
 
