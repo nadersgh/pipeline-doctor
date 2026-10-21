@@ -6,9 +6,12 @@
 
 Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs. It gathers evidence with read-only tools (task logs, dbt lineage, git diff, schema drift, guarded SQL checks), explains the root cause in plain language, and proposes a fix that a named human approves as a draft pull request.
 
+![Pipeline Doctor presents a healthy dbt pipeline. The screen reads Pipeline Doctor and Your dbt pipeline, all green, above two model boxes labeled raw.orders and stg_orders on a dark teal dotted background. The calm, reassuring design signals a successful run.](docs/pipeline-doctor-from-failure-to-fix.gif)
 ## Demo
 
 ![A renamed source column fails dbt_build; Pipeline Doctor diagnoses it, JEV clears the fix, and approval commits it to a draft PR branch](docs/demo.gif)
+
+
 
 An upstream system renames `raw.orders.status`, and the Airflow `dbt_build` task fails. The agent finds the schema drift, proposes a one-line patch to `stg_orders`, JEV clears it, and approval commits it to `pipeline-doctor/<incident-id>`. Heuristic reasoner, no API key, 68 seconds. Re-record with `vhs docs/demo.tape`.
 
