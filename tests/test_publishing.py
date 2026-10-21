@@ -12,7 +12,13 @@ from pipeline_doctor.incidents.repository import IncidentNotFoundError, Incident
 from pipeline_doctor.jev.models import JevDecision, JevVerdict
 from pipeline_doctor.memory.store import IncidentMemory, PastIncident
 from pipeline_doctor.publishing.approval import ApprovalService, IncidentApprovalError
-from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PublishError, PullRequest
+from pipeline_doctor.publishing.pull_requests import (
+    GitHubPublisher,
+    LocalGitPublisher,
+    PublishError,
+    PullRequest,
+    pull_request_title,
+)
 from pipeline_doctor.settings import PublisherKind, Settings
 from pipeline_doctor.vcs.repository import GitRepository
 from tests.conftest import RecordingPublisher
@@ -375,6 +381,34 @@ def test_incident_get_rejects_ids_that_are_not_ascii_alphanumeric(
 ) -> None:
     with pytest.raises(IncidentNotFoundError):
         repository.get(incident_id)
+
+
+def _incident_with_fix_title(incident: Incident, title: str) -> Incident:
+    assert incident.fix is not None
+    return incident.model_copy(update={"fix": incident.fix.model_copy(update={"title": title})})
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Rename status column", "[Pipeline Doctor] Rename status column"),
+        (
+            "Fix\nCo-authored-by: x <x@example.com>\r\n\tdone",
+            "[Pipeline Doctor] Fix Co-authored-by: x <x@example.com> done",
+        ),
+        ("bell\x07 and\x1b[31m escape", "[Pipeline Doctor] bell and[31m escape"),
+        ("   \n  ", "[Pipeline Doctor] Proposed fix"),
+        ("x" * 300, f"[Pipeline Doctor] {'x' * 99}…"),
+    ],
+)
+def test_pull_request_title_is_a_single_bounded_printable_line(
+    pending_incident: Incident, title: str, expected: str
+) -> None:
+    # Act
+    result = pull_request_title(_incident_with_fix_title(pending_incident, title))
+
+    # Assert
+    assert result == expected
 
 
 def test_github_publisher_setting_requires_repository_and_token() -> None:

@@ -15,6 +15,8 @@ _PR_FOOTER = (
     "reviewed by a human before merging._\n"
 )
 
+_MAX_TITLE_CHARS = 100
+
 
 class PublishError(RuntimeError):
     """The code host refused or failed a publish step; the incident stays pending so approval can be retried."""
@@ -36,7 +38,15 @@ def branch_name(incident: Incident) -> str:
 
 def pull_request_title(incident: Incident) -> str:
     title = incident.fix.title if incident.fix else "Proposed fix"
-    return f"[Pipeline Doctor] {title}"
+    return f"[Pipeline Doctor] {_sanitise_title(title)}"
+
+
+def _sanitise_title(title: str) -> str:
+    """Single line of printable characters, so model output cannot inject lines into a title or commit subject."""
+    single_line = " ".join("".join(char for char in title if char.isprintable() or char.isspace()).split())
+    if len(single_line) <= _MAX_TITLE_CHARS:
+        return single_line or "Proposed fix"
+    return f"{single_line[: _MAX_TITLE_CHARS - 1].rstrip()}…"
 
 
 class LocalGitPublisher:
