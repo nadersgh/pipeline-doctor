@@ -121,10 +121,11 @@ class GitHubPublisher:
         commit = self._request(
             "POST", f"{repo}/git/commits", json={"message": message, "tree": tree["sha"], "parents": [base_sha]}
         ).json()
-        return commit["sha"]
+        return str(commit["sha"])
 
     def _create_blob(self, repo: str, content: str) -> str:
-        return self._request("POST", f"{repo}/git/blobs", json={"content": content, "encoding": "utf-8"}).json()["sha"]
+        blob = self._request("POST", f"{repo}/git/blobs", json={"content": content, "encoding": "utf-8"}).json()
+        return str(blob["sha"])
 
     def _point_branch_at(self, repo: str, branch: str, sha: str) -> None:
         """Creates the branch, or force-resets one left behind by an earlier attempt."""
