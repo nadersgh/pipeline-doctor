@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from loguru import logger
 
 from pipeline_doctor.agent.factory import build_agent, build_memory
@@ -7,6 +9,10 @@ from pipeline_doctor.publishing.approval import ApprovalService
 from pipeline_doctor.publishing.pull_requests import GitHubPublisher, LocalGitPublisher, PullRequestPublisher
 from pipeline_doctor.settings import PublisherKind, Settings
 from pipeline_doctor.vcs.repository import GitRepository
+
+
+class IncidentIntakeLimitError(RuntimeError):
+    pass
 
 
 def build_publisher(settings: Settings) -> PullRequestPublisher:
@@ -44,12 +50,21 @@ class DoctorService:
         if duplicate is not None:
             logger.info(f"event already tracked as incident {duplicate.id}")
             return duplicate
+        self._enforce_intake_limit()
         return self._repository.save(Incident(event=event))
 
     def diagnose(self, incident_id: str) -> Incident:
         pending = self._repository.get(incident_id)
         diagnosed = build_agent(self._settings, self._memory).diagnose(pending.event)
         return self._repository.save(diagnosed.model_copy(update={"id": pending.id, "created_at": pending.created_at}))
+
+    def _enforce_intake_limit(self) -> None:
+        window_start = datetime.now(UTC) - timedelta(hours=1)
+        recent = sum(1 for incident in self._repository.list_all() if incident.created_at >= window_start)
+        if recent >= self._settings.max_new_incidents_per_hour:
+            raise IncidentIntakeLimitError(
+                f"{recent} incidents opened in the last hour; the limit is {self._settings.max_new_incidents_per_hour}"
+            )
 
     def _find_duplicate(self, event: FailureEvent) -> Incident | None:
         if not (event.dag_id and event.run_id and event.task_id):

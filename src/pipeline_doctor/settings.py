@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     llm_input_cost_per_mtok: float = 2.0
     llm_output_cost_per_mtok: float = 10.0
     max_investigation_rounds: int = 2
+    max_new_incidents_per_hour: int = Field(
+        default=60, ge=1, description="Webhook intake cap: new incidents (each one runs the reasoner) per rolling hour."
+    )
 
     jev_enabled: bool = Field(default=True, description="Gate fix proposals with the JEV decision layer.")
     jev_min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
