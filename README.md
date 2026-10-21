@@ -1,3 +1,7 @@
+[![M8ven Score](https://m8ven.ai/badge/mcp/nadersgh-pipeline-doctor-6ypi0h?v=1041a332d53066530b1e27366b962d21)](https://m8ven.ai/mcp/nadersgh-pipeline-doctor-6ypi0h?s=readme)
+
+
+
 # Pipeline Doctor
 
 Pipeline Doctor is a LangGraph agent that diagnoses failed dbt and Airflow runs. It gathers evidence with read-only tools (task logs, dbt lineage, git diff, schema drift, guarded SQL checks), explains the root cause in plain language, and proposes a fix that a named human approves as a draft pull request.
@@ -107,4 +111,3 @@ The full table, the Snowflake status and the prompt-injection tests: [docs/guard
 
 MIT, see [LICENSE](LICENSE).
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/nadersgh-pipeline-doctor-6ypi0h?v=1041a332d53066530b1e27366b962d21)](https://m8ven.ai/mcp/nadersgh-pipeline-doctor-6ypi0h?s=readme)
