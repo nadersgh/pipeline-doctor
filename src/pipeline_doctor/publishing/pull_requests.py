@@ -1,4 +1,3 @@
-import base64
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
@@ -59,7 +58,10 @@ class LocalGitPublisher:
 
 
 class GitHubPublisher:
-    """Opens a draft pull request through the GitHub REST API using a token scoped to one repository."""
+    """Opens a draft pull request through the GitHub REST API using a token scoped to one repository.
+
+    All files land in a single commit that is attached to the branch last, so a failed publish leaves no partial branch.
+    """
 
     def __init__(
         self,
@@ -86,11 +88,9 @@ class GitHubPublisher:
         branch = branch_name(incident)
         title = pull_request_title(incident)
         repo = f"/repos/{self._repository}"
-        logger.info(f"create github branch {self._repository}:{branch}")
-        base = self._request("GET", f"{repo}/git/ref/heads/{quote(self._base_branch)}").json()
-        self._create_or_reset_branch(repo, branch, base["object"]["sha"])
-        for path, content in sorted(files.items()):
-            self._put_file(repo, branch, f"{self._prefix}{path}", content, title)
+        base_sha = self._request("GET", f"{repo}/git/ref/heads/{quote(self._base_branch)}").json()["object"]["sha"]
+        commit_sha = self._create_commit(repo, base_sha, files, title)
+        self._point_branch_at(repo, branch, commit_sha)
         existing = self._open_pull_request_url(repo, branch)
         if existing is not None:
             logger.info(f"github pull request for {self._repository}:{branch} already open")
@@ -109,8 +109,26 @@ class GitHubPublisher:
         ).json()
         return PullRequest(url=pull["html_url"], branch=branch, title=title)
 
-    def _create_or_reset_branch(self, repo: str, branch: str, sha: str) -> None:
-        """Creates the branch, or force-resets one left behind by an earlier failed attempt."""
+    def _create_commit(self, repo: str, base_sha: str, files: dict[str, str], message: str) -> str:
+        """Builds one commit from all files; nothing is visible on the branch until it is pointed at the commit."""
+        logger.info(f"create github commit {self._repository} {len(files)} files")
+        base_tree = self._request("GET", f"{repo}/git/commits/{base_sha}").json()["tree"]["sha"]
+        entries = [
+            {"path": f"{self._prefix}{path}", "mode": "100644", "type": "blob", "sha": self._create_blob(repo, content)}
+            for path, content in sorted(files.items())
+        ]
+        tree = self._request("POST", f"{repo}/git/trees", json={"base_tree": base_tree, "tree": entries}).json()
+        commit = self._request(
+            "POST", f"{repo}/git/commits", json={"message": message, "tree": tree["sha"], "parents": [base_sha]}
+        ).json()
+        return str(commit["sha"])
+
+    def _create_blob(self, repo: str, content: str) -> str:
+        blob = self._request("POST", f"{repo}/git/blobs", json={"content": content, "encoding": "utf-8"}).json()
+        return str(blob["sha"])
+
+    def _point_branch_at(self, repo: str, branch: str, sha: str) -> None:
+        """Creates the branch, or force-resets one left behind by an earlier attempt."""
         response = self._client.request("POST", f"{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": sha})
         if response.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
             logger.info(f"reset existing github branch {branch}")
@@ -123,19 +141,6 @@ class GitHubPublisher:
         response = self._request("GET", f"{repo}/pulls", params={"head": f"{owner}:{branch}", "state": "open"})
         pulls = response.json()
         return pulls[0]["html_url"] if pulls else None
-
-    def _put_file(self, repo: str, branch: str, path: str, content: str, message: str) -> None:
-        url = f"{repo}/contents/{quote(path)}"
-        existing = self._client.get(url, params={"ref": branch})
-        payload: dict[str, object] = {
-            "message": message,
-            "content": base64.b64encode(content.encode()).decode(),
-            "branch": branch,
-        }
-        if existing.status_code == httpx.codes.OK:
-            payload["sha"] = existing.json()["sha"]
-        logger.info(f"commit github file {path}")
-        self._request("PUT", url, json=payload)
 
     def _request(
         self,
