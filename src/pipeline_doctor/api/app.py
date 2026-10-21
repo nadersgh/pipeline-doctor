@@ -15,7 +15,7 @@ from pipeline_doctor.incidents.report import render_incident_report
 from pipeline_doctor.incidents.repository import IncidentNotFoundError
 from pipeline_doctor.publishing.approval import IncidentApprovalError
 from pipeline_doctor.publishing.pull_requests import PublishError
-from pipeline_doctor.service import DoctorService
+from pipeline_doctor.service import DoctorService, IncidentIntakeLimitError
 from pipeline_doctor.settings import Settings
 
 
@@ -42,6 +42,15 @@ def create_app(settings: Settings | None = None, service: DoctorService | None =
     @app.exception_handler(FixApplicationError)
     def approval_conflict(_: Request, error: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(error)}, status_code=status.HTTP_409_CONFLICT)
+
+    @app.exception_handler(IncidentIntakeLimitError)
+    def intake_limited(_: Request, error: IncidentIntakeLimitError) -> JSONResponse:
+        logger.warning(f"incident intake limited: {error}")
+        return JSONResponse(
+            {"detail": f"too many new incidents: {error}"},
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers={"Retry-After": "3600"},
+        )
 
     @app.exception_handler(PublishError)
     def publish_failed(_: Request, error: PublishError) -> JSONResponse:

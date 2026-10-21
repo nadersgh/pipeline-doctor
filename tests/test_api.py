@@ -216,3 +216,66 @@ def test_create_app_allows_open_access_only_when_explicit(tmp_path: Path) -> Non
 
     # Assert
     assert client.get("/incidents").status_code == 200
+
+
+def test_webhook_answers_429_once_the_hourly_incident_limit_is_reached(
+    tmp_path: Path, pending_incident: Incident, monkeypatch: pytest.MonkeyPatch, recording_publisher: RecordingPublisher
+) -> None:
+    # Setup
+    settings = Settings(
+        dbt_project_dir=tmp_path / "project",
+        state_dir=tmp_path / "state",
+        api_token=SecretStr(_TOKEN),
+        max_new_incidents_per_hour=2,
+        _env_file=None,
+    )
+    monkeypatch.setattr("pipeline_doctor.service.build_agent", lambda *_args: FakeAgent(pending_incident))
+    limited = TestClient(create_app(settings, DoctorService(settings, publisher=recording_publisher)))
+
+    # Act
+    statuses = [
+        limited.post("/webhooks/airflow", json={**_CALLBACK, "run_id": f"run_{number}"}, headers=_AUTH).status_code
+        for number in range(3)
+    ]
+
+    # Assert
+    assert statuses == [202, 202, 429]
+
+
+def test_webhook_retry_of_a_tracked_failure_is_not_counted_against_the_limit(
+    tmp_path: Path, pending_incident: Incident, monkeypatch: pytest.MonkeyPatch, recording_publisher: RecordingPublisher
+) -> None:
+    # Setup
+    settings = Settings(
+        dbt_project_dir=tmp_path / "project",
+        state_dir=tmp_path / "state",
+        api_token=SecretStr(_TOKEN),
+        max_new_incidents_per_hour=1,
+        _env_file=None,
+    )
+    monkeypatch.setattr("pipeline_doctor.service.build_agent", lambda *_args: FakeAgent(pending_incident))
+    limited = TestClient(create_app(settings, DoctorService(settings, publisher=recording_publisher)))
+
+    # Act
+    statuses = [limited.post("/webhooks/airflow", json=_CALLBACK, headers=_AUTH).status_code for _ in range(2)]
+
+    # Assert
+    assert statuses == [202, 202]
+
+
+def test_webhook_rejects_an_oversized_identifier(client: TestClient) -> None:
+    # Act
+    response = client.post("/webhooks/airflow", json={**_CALLBACK, "dag_id": "d" * 251}, headers=_AUTH)
+
+    # Assert
+    assert response.status_code == 422
+
+
+def test_webhook_truncates_an_oversized_exception_instead_of_rejecting_it(client: TestClient) -> None:
+    # Act
+    accepted = client.post("/webhooks/airflow", json={**_CALLBACK, "exception": "x" * 50_000}, headers=_AUTH)
+    incident = client.get(f"/incidents/{accepted.json()['incident_id']}", headers=_AUTH).json()
+
+    # Assert
+    assert accepted.status_code == 202
+    assert len(incident["event"]["log_excerpt"]) == 20_000
